@@ -1,25 +1,27 @@
-# Regime-Switching Bayesian Framework: High-Level Overview
+# Regime-Switching Bayesian Framework: Overview
+
+**⚠️ START HERE: Read `problem_and_solution.md` first.** That document explains the concrete financial problem, shows what goes wrong with standard approaches, and walks through how each component solves it.
+
+This page provides the organizational overview and tool justification. You should read it *after* understanding the financial problem.
 
 ## The Problem We're Solving
 
-Financial markets, economic systems, and many real-world phenomena don't operate in a single stable state. They shift between different **regimes**—periods with fundamentally different statistical properties.
+Financial markets don't operate in a single stable state—they shift between **regimes** (bull/bear, normal/crisis, low-vol/high-vol) with fundamentally different statistical properties.
 
-- **Bull vs. bear markets** have different return distributions and correlations
-- **Low-volatility vs. high-volatility periods** behave differently
-- **Risk factors** (shocks) have regime-dependent impacts on asset prices
-- **Tail risks** emerge and disappear depending on market conditions
+**Consequence:** Standard statistical models fail because they:
+- Underestimate tail risk during regime shifts
+- Assume constant correlations (they spike in crises)
+- Miss the shock structure that drives regime-dependent impacts
+- Ignore estimation uncertainty
 
-Standard statistical models assume a single distribution, which means they:
-- **Underestimate tail risk** during regime shifts
-- **Overestimate diversification** (correlations spike during crises)
-- **Misidentify causality** (a shock's impact depends on which regime we're in)
-- **Fail at prediction** when regime boundaries are crossed
+**See `problem_and_solution.md` for concrete examples** (2008 crisis, pension fund scenario, VaR failures).
 
-This framework builds a **probabilistic model that explicitly accounts for regime switching**, allowing practitioners to:
-1. Infer which regime we're currently in (from data)
-2. Quantify uncertainty about regime identification
-3. Simulate forward-looking scenarios that account for regime shifts
-4. Assess portfolio risk conditionally (different regimes → different VaR)
+This framework solves these problems by building a **probabilistic model that explicitly accounts for regime switching**, allowing practitioners to:
+1. Infer current regime (+ uncertainty) from data
+2. Model regime-dependent returns, correlations, tail risk
+3. Understand shocks and their propagation by regime
+4. Simulate forward-looking scenarios with full uncertainty quantification
+5. Make portfolio decisions based on realistic risk metrics
 
 ## Why Bayesian?
 

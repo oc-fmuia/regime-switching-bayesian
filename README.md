@@ -85,9 +85,22 @@ See `notebooks/01_model_building.ipynb` for a detailed walkthrough.
 
 ## Documentation Map
 
-Start here: **`docs/overview.md`** — Big picture, motivation, tool justification, Bayesian reasoning, documentation navigation.
+### 🎯 START HERE: The Financial Problem
 
-Then choose your path:
+**`docs/problem_and_solution.md`** (READ FIRST!)
+- Opens with a concrete scenario: 2008 financial crisis, pension fund
+- Shows what goes wrong with Gaussian models (concrete failures, numbers, VaR predictions)
+- Walks through each component and the financial problem it solves
+- Includes ASCII diagrams and real examples
+- Maps financial problems → mathematical solutions → framework components
+
+**Estimated read time: 20–25 minutes. Essential for understanding why this framework exists.**
+
+---
+
+### Then choose your path:
+
+**`docs/overview.md`** — Organization, tool justification, Bayesian reasoning
 
 **Learning Path (Theory-First)**
 1. `docs/overview.md` ← **Start here**
@@ -106,7 +119,7 @@ Then choose your path:
 4. `docs/regime_switching.md` — Understand specific components
 5. Browse source code (`src/`) for details
 
-**Component Reference**
+**Component Reference (After Problem & Solution)**
 - **Markov chains** → `docs/regime_switching.md` + `src/regimes/markov.py`
 - **Student-t returns** → `docs/shock_propagation.md` + `src/returns/`
 - **Shock model** → `docs/shock_propagation.md` + `src/regimes/shocks.py`
@@ -114,14 +127,15 @@ Then choose your path:
 - **NUTS inference** → `docs/inference_and_diagnostics.md` + `src/inference/sampler.py`
 - **Monte Carlo** → `docs/monte_carlo_simulation.md` + `src/simulation/simulator.py`
 
-**All files**
-- **`docs/math_foundations.md`** — Bayesian theory (why Student-t, why Dirichlet priors, notation)
-- **`docs/overview.md`** — High-level architecture, tool choices, Bayesian vs. frequentist reasoning
+**All Documentation Files**
+- **`docs/problem_and_solution.md`** ← **START HERE** (financial problem, failures of standard models, how each component solves it)
+- **`docs/overview.md`** — Organization, tool justification, Bayesian vs. frequentist reasoning
+- **`docs/math_foundations.md`** — Bayesian theory and notation
 - **`docs/regime_switching.md`** — Markov chain theory and stationary distributions
-- **`docs/shock_propagation.md`** — Shock mechanics and return dynamics (r_t = μ + B·u + ε)
+- **`docs/shock_propagation.md`** — Shock mechanics and return dynamics
 - **`docs/bayesian_model_builder.md`** — Full model specification and prior choices
-- **`docs/inference_and_diagnostics.md`** — NUTS sampling, Rhat, ESS, posterior predictive checks
-- **`docs/monte_carlo_simulation.md`** — Forward simulation and portfolio metrics (VaR, CVaR, Sharpe)
+- **`docs/inference_and_diagnostics.md`** — NUTS sampling, convergence diagnostics
+- **`docs/monte_carlo_simulation.md`** — Forward simulation and portfolio metrics
 - **Code docstrings** — All functions thoroughly documented with type hints and examples
 
 ## Notebooks
