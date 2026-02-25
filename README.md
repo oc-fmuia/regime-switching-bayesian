@@ -38,35 +38,91 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-**Generate synthetic data, build model, infer, simulate:**
+**New to this framework?** Start with `docs/overview.md` to understand the big picture.
+
+**Ready to code?** Here's a minimal example:
 
 ```python
-from src.bayesian import ModelBuilder
-from src.simulation import MonteCarloSimulator
+from src.inference.model_builder import ModelBuilder, PriorSpec
+from src.inference.sampler import NUTSSampler
+from src.simulation.simulator import MonteCarloSimulator
 import numpy as np
 
-# Initialize
-builder = ModelBuilder(n_assets=5, n_regimes=2, n_shocks=3)
+# Setup
+n_assets, n_regimes, n_shocks = 5, 2, 3
+n_obs = 100
 
-# Build PyMC model
-model = builder.build_model(data=returns_data)
+# Generate synthetic returns (for example)
+returns_data = np.random.randn(n_obs, n_assets)
+
+# Build Bayesian model
+prior_spec = PriorSpec(
+    n_assets=n_assets,
+    n_regimes=n_regimes,
+    n_shocks=n_shocks,
+    regime_persistence=0.95,
+)
+builder = ModelBuilder(prior_spec)
+model = builder.build_model(returns=returns_data)
 
 # Inference (NUTS sampling)
-idata = builder.infer(model, draws=2000, tune=1000)
+sampler = NUTSSampler(model)
+idata = sampler.sample(draws=2000, tune=1000, chains=4, target_accept=0.9)
 
-# Simulation
-simulator = MonteCarloSimulator(idata, n_assets=5, n_regimes=2)
+# Check diagnostics
+diag = sampler.get_diagnostics(idata)
+print(f"Rhat: {diag.rhat_dict}")  # Should be < 1.01 (converged)
+
+# Forward simulation
+simulator = MonteCarloSimulator(idata)
 paths = simulator.simulate(n_paths=10000, horizon=252)
+metrics = simulator.compute_portfolio_metrics(paths, weights=np.ones(n_assets)/n_assets)
+print(f"Expected Return: {metrics['mean_return']:.2%}")
+print(f"VaR (95%): {metrics['var_95']:.2%}")
 ```
 
-See `notebooks/` for detailed examples.
+See `notebooks/01_model_building.ipynb` for a detailed walkthrough.
 
-## Documentation
+## Documentation Map
 
-- **`docs/math_foundations.md`** — Bayesian theory (why Student-t, why LKJ, Dirichlet priors)
-- **`docs/regime_switching.md`** — Full mathematical specification (generative model, priors, likelihood)
-- **`docs/shock_propagation.md`** — Shock mechanics and return dynamics
-- **Code docstrings** — All functions thoroughly documented with type hints
+Start here: **`docs/overview.md`** — Big picture, motivation, tool justification, Bayesian reasoning, documentation navigation.
+
+Then choose your path:
+
+**Learning Path (Theory-First)**
+1. `docs/overview.md` ← **Start here**
+2. `docs/math_foundations.md` — Bayesian theory and notation
+3. `docs/regime_switching.md` — Markov chains and regime dynamics
+4. `docs/shock_propagation.md` — Shock mechanics
+5. `docs/bayesian_model_builder.md` — Model specification and priors
+6. `docs/inference_and_diagnostics.md` — Inference and convergence
+7. `docs/monte_carlo_simulation.md` — Forward simulation
+8. `notebooks/01_model_building.ipynb` — Code walkthrough
+
+**Practical Path (Code-First)**
+1. `docs/overview.md` ← **Start here**
+2. `notebooks/01_model_building.ipynb` — Working example
+3. `notebooks/02_interactive_exploration.ipynb` — Interactive sandbox
+4. `docs/regime_switching.md` — Understand specific components
+5. Browse source code (`src/`) for details
+
+**Component Reference**
+- **Markov chains** → `docs/regime_switching.md` + `src/regimes/markov.py`
+- **Student-t returns** → `docs/shock_propagation.md` + `src/returns/`
+- **Shock model** → `docs/shock_propagation.md` + `src/regimes/shocks.py`
+- **Bayesian model** → `docs/bayesian_model_builder.md` + `src/inference/model_builder.py`
+- **NUTS inference** → `docs/inference_and_diagnostics.md` + `src/inference/sampler.py`
+- **Monte Carlo** → `docs/monte_carlo_simulation.md` + `src/simulation/simulator.py`
+
+**All files**
+- **`docs/math_foundations.md`** — Bayesian theory (why Student-t, why Dirichlet priors, notation)
+- **`docs/overview.md`** — High-level architecture, tool choices, Bayesian vs. frequentist reasoning
+- **`docs/regime_switching.md`** — Markov chain theory and stationary distributions
+- **`docs/shock_propagation.md`** — Shock mechanics and return dynamics (r_t = μ + B·u + ε)
+- **`docs/bayesian_model_builder.md`** — Full model specification and prior choices
+- **`docs/inference_and_diagnostics.md`** — NUTS sampling, Rhat, ESS, posterior predictive checks
+- **`docs/monte_carlo_simulation.md`** — Forward simulation and portfolio metrics (VaR, CVaR, Sharpe)
+- **Code docstrings** — All functions thoroughly documented with type hints and examples
 
 ## Notebooks
 
