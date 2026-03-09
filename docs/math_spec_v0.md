@@ -45,7 +45,7 @@ $$s_t \mid s_{t-1} \sim \text{Categorical}(P_{s_{t-1}, \,\cdot\,}), \quad t = 2,
 
 Conditional on the regime, returns are multivariate Normal:
 
-$$z_t \mid (s_t = k) \sim \mathcal{N}(\mu_k, \, \Sigma_k)$$
+$$z_t \mid (s_t = k) \sim \mathcal{N}(\mu_k, \ \Sigma_k)$$
 
 **Parameters per regime:**
 
@@ -60,7 +60,7 @@ No hierarchical decomposition of $\mu_k$ and no factor structure for $\Sigma_k$ 
 
 Each $\Sigma_k$ is decomposed as:
 
-$$\Sigma_k = \text{diag}(\sigma_k) \; L_k \, L_k^T \; \text{diag}(\sigma_k)$$
+$$\Sigma_k = \text{diag}(\sigma_k) \ L_k \ L_k^T \ \text{diag}(\sigma_k)$$
 
 where:
 
@@ -103,7 +103,7 @@ After NUTS estimates the continuous parameters $\theta$, FFBS recovers posterior
 
 **Backward sampling:**
 
-1. Normalize: $\gamma_T(k) = \alpha_T(k) \,/\, \sum_{k'} \alpha_T(k')$.
+1. Normalize: $\gamma_T(k) = \alpha_T(k) \/\ \sum_{k'} \alpha_T(k')$.
 2. Sample $s_T \sim \text{Categorical}(\gamma_T)$.
 3. For $t = T-1, \ldots, 1$:
    - $\gamma_t(k) \propto \alpha_t(k) \cdot P_{k, \, s_{t+1}}$
@@ -117,7 +117,7 @@ This produces one draw of $s_{1:T}$ from $p(s_{1:T} \mid z_{1:T}, \theta)$. Repe
 
 ### Transition matrix (sticky)
 
-$$P_{i, \,\cdot\,} \sim \text{Dirichlet}(\alpha_i), \quad i = 1, \ldots, K$$
+$$P_{i, \cdot} \sim \text{Dirichlet}(\alpha_i), \quad i = 1, \ldots, K$$
 
 with sticky concentration: $\alpha_{i,i} = 20$, $\alpha_{i, j \neq i} = 2$. This encourages regimes to persist (realistic for economic regimes that last months, not days).
 
@@ -129,7 +129,7 @@ Uninformative (symmetric).
 
 ### Regime means
 
-$$\mu_k \sim \mathcal{N}(0, \; \sigma_\mu^2 \, I_d), \quad \sigma_\mu = 0.05$$
+$$\mu_k \sim \mathcal{N}(0, \ \sigma_\mu^2 \ I_d), \quad \sigma_\mu = 0.05$$
 
 Centered at zero; scale of 5% reflects the order of magnitude of monthly returns.
 
@@ -192,9 +192,9 @@ This v0 is a strict subset of the full model in `math_spec.md`. The following ta
 |-----------|--------------------------|
 | K = 2 regimes | K >= 2 (typically 3) |
 | Public assets only | Public + private, with mixed-frequency measurement model |
-| mu_k as free vectors | Hierarchical: mu_{k,l} = m_k + a_{k,g(l)} + b_{k,g(l),h(l)} + u_{k,l} |
-| Full Sigma_k via LKJ | Factor structure: Sigma_k = B_k B_k^T + D_k |
-| Multivariate Normal | Multivariate Student-t (nu_k degrees of freedom) |
+| $\mu_k$ as free vectors | Hierarchical: $mu_{k,l} = m_k + a_{k,g(l)} + b_{k,g(l),h(l)} + u_{k,l}$ |
+| Full $\Sigma_k$ via LKJ | Factor structure: $\Sigma_k = B_k B_k^T + D_k$ |
+| Multivariate Normal | Multivariate Student-t ($\nu_k$ degrees of freedom) |
 | Batch inference only | Real-time filtering and scenario analysis |
 
 Each extension is independent and can be added incrementally.
