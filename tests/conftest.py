@@ -1,43 +1,18 @@
-"""
-Pytest configuration and fixtures for regime-switching tests.
-"""
+"""Pytest configuration and shared fixtures for v0 regime-switching tests."""
 
 import numpy as np
 import pytest
 
-
-@pytest.fixture
-def small_config():
-    """Small config for fast testing."""
-    return {
-        "T": 20,           # 20 months
-        "K": 2,            # 2 regimes
-        "G": 2,            # 2 geographies
-        "H": 2,            # 2 sectors
-        "d_pub": 3,        # 3 public assets
-        "d_priv": 2,       # 2 private assets
-        "r": 2,            # 2 factors
-        "seed": 42,
-    }
+from src.data_gen import generate_hmm_data
 
 
 @pytest.fixture
-def full_config():
-    """Full config for realistic testing."""
-    return {
-        "T": 120,          # 120 months
-        "K": 3,            # 3 regimes
-        "G": 2,            # 2 geographies
-        "H": 2,            # 2 sectors
-        "d_pub": 4,        # 4 public assets
-        "d_priv": 3,       # 3 private assets
-        "r": 2,            # 2 factors
-        "seed": 42,
-    }
+def small_data():
+    """Small synthetic dataset (T=30, d=2) for fast unit tests."""
+    return generate_hmm_data(T=30, K=2, d=2, seed=42)
 
 
 @pytest.fixture
-def random_seed():
-    """Fixture to ensure reproducibility."""
-    np.random.seed(42)
-    return 42
+def medium_data():
+    """Medium synthetic dataset (T=120, d=3) for statistical tests."""
+    return generate_hmm_data(T=120, K=2, d=3, seed=42)
