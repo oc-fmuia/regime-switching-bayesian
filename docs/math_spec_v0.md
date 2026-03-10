@@ -15,7 +15,7 @@
 | d | Number of public assets |
 | t | Month index, t = 1, ..., T |
 | k | Regime index, k = 1, ..., K |
-| z_t | Observed return vector at month t, z_t in R^d |
+| $z_t$ | Observed return vector at month t, $z_t$ in $\mathbb{R}^d$ |
 
 ---
 
@@ -25,7 +25,7 @@ The regime at each month is a latent discrete state governed by a first-order Ma
 
 **Transition matrix:**
 
-$$P \in [0,1]^{K \times K}, \quad \sum_{j=1}^{K} P_{ij} = 1 \;\; \forall \, i$$
+$$P \in [0,1]^{K \times K}, \quad \sum_{j=1}^{K} P_{ij} = 1 \ \forall \, i$$
 
 where $P_{ij} = \Pr(s_t = j \mid s_{t-1} = i)$.
 
@@ -97,7 +97,17 @@ The recursion is implemented via `pytensor.scan` over t = 2, ..., T.
 
 ## 6. Forward-Filter Backward-Sampler (FFBS)
 
-After NUTS estimates the continuous parameters $\theta$, FFBS recovers posterior samples of the regime sequence $s_{1:T}$.
+After NUTS estimates the continuous parameters $\theta$, FFBS recovers posterior samples of the regime sequence $s_{1:T}$. For a fixed posterior draw $\theta^{(m)}$, the FFBS step targets the conditional posterior
+
+$$
+p(s_{1:T}\mid z_{1:T}, \theta^{(m)}),
+$$
+
+and produces one sampled path
+
+$$
+s_{1:T}^{(m)} \sim p(s_{1:T}\mid z_{1:T}, \theta^{(m)}).
+$$
 
 **Forward pass:** Run the forward algorithm to obtain $\alpha_t(k)$ for all t, k.
 
@@ -106,7 +116,7 @@ After NUTS estimates the continuous parameters $\theta$, FFBS recovers posterior
 1. Normalize: $\gamma_T(k) = \alpha_T(k) \/\ \sum_{\tilde{k}} \alpha_T(\tilde{k})$.
 2. Sample $s_T \sim \text{Categorical}(\gamma_T)$.
 3. For $t = T-1, \ldots, 1$:
-   - $\gamma_t(k) \propto \alpha_t(k) \cdot P_{k, \, s_{t+1}}$
+   - $\gamma_t(k) \propto \alpha_t(k) \cdot P_{k, \ s_{t+1}}$
    - Sample $s_t \sim \text{Categorical}(\gamma_t)$.
 
 This produces one draw of $s_{1:T}$ from $p(s_{1:T} \mid z_{1:T}, \theta)$. Repeating for each posterior sample of $\theta$ gives the full posterior over regime paths.
@@ -131,7 +141,7 @@ Uninformative (symmetric).
 
 $$\mu_k \sim \mathcal{N}(0, \ \sigma_\mu^2 \ I_d), \quad \sigma_\mu = 0.05$$
 
-Centered at zero; scale of 5% reflects the order of magnitude of monthly returns.
+Centered at zero and the scale of 5% reflects the order of magnitude of monthly returns.
 
 ### Per-asset standard deviations
 
