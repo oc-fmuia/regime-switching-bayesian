@@ -81,11 +81,11 @@ $$\log \alpha_1(k) = \log \pi_{0,k} + \log \mathcal{N}(z_1 \mid \mu_k, \Sigma_k)
 
 **Recursion (t = 2, ..., T):**
 
-$$\log \alpha_t(k) = \text{LogSumExp}_{k'}\!\big(\log \alpha_{t-1}(k') + \log P_{k',k}\big) + \log \mathcal{N}(z_t \mid \mu_k, \Sigma_k)$$
+$$\log \alpha_t(k) = \text{LogSumExp}_{\tilde{k}}\ \big(\log \alpha_{t-1}(\tilde{k}) + \log P_{\tilde{k},k}\big) + \log \mathcal{N}(z_t \mid \mu_k, \Sigma_k)$$
 
 **Marginal log-likelihood:**
 
-$$\log p(z_{1:T} \mid \theta) = \text{LogSumExp}_{k}\!\big(\log \alpha_T(k)\big)$$
+$$\log p(z_{1:T} \mid \theta) = \text{LogSumExp}_{k}\ \big(\log \alpha_T(k)\big)$$
 
 where:
 
@@ -103,7 +103,7 @@ After NUTS estimates the continuous parameters $\theta$, FFBS recovers posterior
 
 **Backward sampling:**
 
-1. Normalize: $\gamma_T(k) = \alpha_T(k) \/\ \sum_{k'} \alpha_T(k')$.
+1. Normalize: $\gamma_T(k) = \alpha_T(k) \/\ \sum_{\tilde{k}} \alpha_T(\tilde{k})$.
 2. Sample $s_T \sim \text{Categorical}(\gamma_T)$.
 3. For $t = T-1, \ldots, 1$:
    - $\gamma_t(k) \propto \alpha_t(k) \cdot P_{k, \, s_{t+1}}$
