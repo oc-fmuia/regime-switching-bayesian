@@ -5,6 +5,7 @@ import pytest
 
 from src.data_gen import generate_hmm_data
 from src.inference import (
+    _permute_chain,
     check_diagnostics,
     check_diagnostics_label_aware,
     ffbs_single,
@@ -92,3 +93,90 @@ def test_label_aware_diagnostics_keys(fitted_result):
     assert isinstance(diag["best_permutations"], list)
     if np.isfinite(diag["max_rhat"]):
         assert diag["max_rhat"] <= diag["naive_max_rhat"]
+
+
+def _make_mock_posterior(K, d, n_chains=2, n_draws=5):
+    """Build a minimal xarray Dataset that looks like a posterior for _permute_chain tests."""
+    import xarray as xr
+
+    rng = np.random.default_rng(0)
+    mu = rng.standard_normal((n_chains, n_draws, K, d))
+    P = np.full((n_chains, n_draws, K, K), 1.0 / K)
+
+    ds = xr.Dataset(
+        {
+            "mu": (["chain", "draw", "mu_dim_0", "mu_dim_1"], mu),
+            "P": (["chain", "draw", "P_dim_0", "P_dim_1"], P),
+        },
+        coords={"chain": range(n_chains), "draw": range(n_draws)},
+    )
+
+    n_packed = d * (d + 1) // 2
+    for k in range(K):
+        packed = rng.standard_normal((n_chains, n_draws, n_packed))
+        ds[f"chol_cov_{k}"] = (["chain", "draw", "packed"], packed)
+        ds[f"chol_cov_{k}_corr"] = (["chain", "draw", "packed"], packed * 2)
+    return ds
+
+
+@pytest.mark.parametrize(
+    "K, perm",
+    [
+        (2, (1, 0)),
+        (3, (2, 0, 1)),
+        (3, (1, 2, 0)),
+        (3, (0, 2, 1)),
+    ],
+)
+def test_permute_chain_chol_cov(K, perm):
+    """Verify _permute_chain correctly remaps chol_cov variables for any permutation."""
+    d = 2
+    ds = _make_mock_posterior(K, d)
+    chain_idx = 0
+
+    originals = {}
+    for k in range(K):
+        for suffix in ("", "_corr"):
+            name = f"chol_cov_{k}{suffix}"
+            originals[name] = ds[name].values[chain_idx].copy()
+
+    result = _permute_chain(ds, chain_idx, perm, K)
+
+    for k_new, k_old in enumerate(perm):
+        for suffix in ("", "_corr"):
+            dst = f"chol_cov_{k_new}{suffix}"
+            src = f"chol_cov_{k_old}{suffix}"
+            np.testing.assert_array_equal(
+                result[dst].values[chain_idx],
+                originals[src],
+                err_msg=f"perm={perm}: {dst} should contain original {src}",
+            )
+
+
+@pytest.mark.parametrize(
+    "K, perm",
+    [
+        (2, (1, 0)),
+        (3, (2, 0, 1)),
+    ],
+)
+def test_permute_chain_mu_and_P(K, perm):
+    """Verify _permute_chain correctly remaps mu and P."""
+    d = 2
+    ds = _make_mock_posterior(K, d)
+    chain_idx = 0
+    perm_arr = np.array(perm)
+
+    orig_mu = ds["mu"].values[chain_idx].copy()
+    orig_P = ds["P"].values[chain_idx].copy()
+
+    result = _permute_chain(ds, chain_idx, perm, K)
+
+    np.testing.assert_array_equal(
+        result["mu"].values[chain_idx],
+        orig_mu[:, perm_arr, :],
+    )
+    np.testing.assert_array_equal(
+        result["P"].values[chain_idx],
+        orig_P[:, perm_arr, :][:, :, perm_arr],
+    )
