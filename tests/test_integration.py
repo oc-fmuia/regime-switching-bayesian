@@ -13,12 +13,9 @@ from src.model import build_model
 def test_synthetic_recovery():
     """End-to-end: generate data, fit, recover regimes, check recovery."""
     data = generate_hmm_data(T=60, K=2, d=2, seed=42)
-    _, model_marg = build_model(data["returns"], K=2)
+    model = build_model(data["returns"], K=2)
 
-    # Single chain avoids cross-chain Rhat inflation from label switching.
-    # For a thorough convergence analysis, run multiple chains with an
-    # ordering constraint or post-hoc relabeling (future improvement).
-    idata = fit(model_marg, draws=500, tune=500, chains=1, seed=42)
+    idata = fit(model, draws=500, tune=500, chains=1, seed=42)
     diagnostics = check_diagnostics(idata)
 
     assert diagnostics["no_divergences"], (
