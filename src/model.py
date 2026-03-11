@@ -3,7 +3,6 @@
 import numpy as np
 import pytensor
 import pymc as pm
-import pymc_extras as pmx
 import pytensor.tensor as pt
 
 
@@ -16,68 +15,40 @@ def build_model(
     lkj_eta: float = 2.0,
     sigma_prior_sigma: float = 0.10,
     order_means: bool = False,
-) -> tuple[pm.Model, pm.Model]:
-    """
-    Build the unmarginalized and marginalized regime-switching HMM.
-
-    Returns (unmarginalized_model, marginalized_model).
-    The marginalized model integrates out the discrete chain for NUTS.
-
-    When order_means=True, a soft ordering constraint is placed on the first
-    asset's mean (mu[0,0] < mu[1,0] < ...) to break label symmetry.
-    """
-    T, d = data.shape
-
-    sticky_alpha = np.full((K, K), sticky_alpha_offdiag)
-    np.fill_diagonal(sticky_alpha, sticky_alpha_diag)
-
-    with pm.Model() as model:
-        P = pm.Dirichlet("P", a=sticky_alpha, shape=(K, K))
-        init_dist = pm.Categorical.dist(p=np.ones(K) / K)
-        chain = pmx.DiscreteMarkovChain("chain", P=P, init_dist=init_dist, shape=(T,))
-
-        mu = pm.Normal("mu", mu=0.0, sigma=mu_prior_sigma, shape=(K, d))
-
-        if order_means and K >= 2:
-            for k in range(K - 1):
-                pm.Potential(
-                    f"mu_order_{k}",
-                    pt.switch(mu[k + 1, 0] > mu[k, 0], 0.0, -1e10),
-                )
-
-        chols = []
-        for k in range(K):
-            chol_k, _, _ = pm.LKJCholeskyCov(
-                f"chol_cov_{k}",
-                n=d,
-                eta=lkj_eta,
-                sd_dist=pm.HalfNormal.dist(sigma=sigma_prior_sigma),
-                compute_corr=True,
-            )
-            chols.append(chol_k)
-        chol_stack = pt.stack(chols)  # (K, d, d)
-
-        pm.MvNormal("obs", mu=mu[chain], chol=chol_stack[chain], observed=data)
-
-    model_marg = pmx.marginalize(model, ["chain"])
-    return model, model_marg
-
-
-def build_model_manual(
-    data: np.ndarray,
-    K: int = 2,
-    sticky_alpha_diag: float = 20.0,
-    sticky_alpha_offdiag: float = 2.0,
-    mu_prior_sigma: float = 0.05,
-    lkj_eta: float = 2.0,
-    sigma_prior_sigma: float = 0.10,
 ) -> pm.Model:
     """
-    JAX-compatible HMM using a manual forward algorithm via pytensor.scan.
+    Build the regime-switching HMM with a manual forward algorithm.
 
-    Unlike build_model(), this avoids pmx.marginalize (which uses
-    vectorize_graph and generates Alloc ops that break JAX tracing).
-    Use this with nuts_sampler="numpyro".
+    Parameters
+    ----------
+    data: float[T, d]
+        Observed return matrix.
+    K: int
+        Number of regimes.
+    sticky_alpha_diag: float
+        Dirichlet concentration on the diagonal (self-transition).
+    sticky_alpha_offdiag: float
+        Dirichlet concentration off-diagonal.
+    mu_prior_sigma: float
+        Prior std for regime means.
+    lkj_eta: float
+        LKJ shape parameter for correlation matrices.
+    sigma_prior_sigma: float
+        Prior scale for regime standard deviations.
+    order_means: bool
+        If True, add a soft ordering constraint mu[0,0] < mu[1,0] < ...
+        on the first asset's mean to break label symmetry.
+
+    Returns
+    -------
+    pm.Model
+        The compiled PyMC model with the HMM log-likelihood as a Potential.
+
+    Notes
+    -----
+    Uses pytensor.scan for the forward recursion, which JIT-compiles to
+    jax.lax.scan under the NumPyro backend. Prefer nuts_sampler="numpyro"
+    for best performance.
     """
     T, d = data.shape
 
@@ -90,6 +61,13 @@ def build_model_manual(
         log_pi0 = pt.log(pt.ones(K) / K)
 
         mu = pm.Normal("mu", mu=0.0, sigma=mu_prior_sigma, shape=(K, d))
+
+        if order_means and K >= 2:
+            for k in range(K - 1):
+                pm.Potential(
+                    f"mu_order_{k}",
+                    pt.switch(mu[k + 1, 0] > mu[k, 0], 0.0, -1e10),
+                )
 
         chols = []
         for k in range(K):

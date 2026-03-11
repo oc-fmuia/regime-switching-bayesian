@@ -14,17 +14,19 @@ def fit(
     chains: int = 4,
     target_accept: float = 0.9,
     seed: int = 42,
-    nuts_sampler: str = "pymc",
+    nuts_sampler: str = "numpyro",
     initvals: dict | None = None,
 ) -> az.InferenceData:
     """Run NUTS sampling on the (marginalized) model.
 
     Parameters
     ----------
-    nuts_sampler : "pymc" (default C backend) or "numpyro" (JAX backend).
-    initvals : optional dict of {var_name: value} passed to pm.sample to fix
-        the starting point of the sampler.  Useful for mitigating label
-        switching by pinning mu to a known ordering.
+    nuts_sampler: str
+        "numpyro" (default, JAX backend) or "pymc" (C backend).
+    initvals: dict | None
+        Optional {var_name: value} passed to pm.sample to fix the starting
+        point of the sampler. Useful for mitigating label switching by
+        pinning mu to a known ordering.
     """
     with model:
         idata = pm.sample(
