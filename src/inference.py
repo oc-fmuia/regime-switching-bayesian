@@ -84,28 +84,32 @@ def _permute_chain(
         elif name == "P" and shape_tail == (K, K):
             arr[chain_idx] = arr[chain_idx][:, perm_arr, :][:, :, perm_arr]
 
-    # Swap ALL per-regime variables: chol_cov_0, chol_cov_0_corr,
+    # Permute ALL per-regime variables: chol_cov_0, chol_cov_0_corr,
     # chol_cov_0_stds, chol_cov_0_cholesky-cov-packed__, etc.
-    for k_new, k_old in enumerate(perm):
-        if k_new == k_old:
-            continue
-        # Find variable name pairs: everything starting with "chol_cov_{k}"
-        # where the next char is either end-of-string or underscore/hyphen.
-        for src_name in list(ds.data_vars):
-            prefix_old = f"chol_cov_{k_old}"
-            if not src_name.startswith(prefix_old):
-                continue
-            suffix = src_name[len(prefix_old):]
-            if suffix and suffix[0] not in ("_", "-"):
+    # We collect every distinct suffix (e.g. "", "_corr", "_stds",
+    # "_cholesky-cov-packed__") and permute each group via a temp buffer
+    # so that 3-cycles and longer cycles are handled correctly.
+    chol_suffixes = set()
+    for name in ds.data_vars:
+        for k in range(K):
+            prefix = f"chol_cov_{k}"
+            if name.startswith(prefix):
+                suffix = name[len(prefix):]
+                if not suffix or suffix[0] in ("_", "-"):
+                    chol_suffixes.add(suffix)
+
+    for suffix in chol_suffixes:
+        tmp = {}
+        for k in range(K):
+            var_name = f"chol_cov_{k}{suffix}"
+            if var_name in ds:
+                tmp[k] = ds[var_name].values[chain_idx].copy()
+        for k_new, k_old in enumerate(perm):
+            if k_new == k_old:
                 continue
             dst_name = f"chol_cov_{k_new}{suffix}"
-            if dst_name in ds:
-                # Only swap once: when k_new < k_old (avoid double-swap).
-                if k_new < k_old:
-                    src_arr = ds[src_name].values[chain_idx].copy()
-                    dst_arr = ds[dst_name].values[chain_idx].copy()
-                    ds[src_name].values[chain_idx] = dst_arr
-                    ds[dst_name].values[chain_idx] = src_arr
+            if dst_name in ds and k_old in tmp:
+                ds[dst_name].values[chain_idx] = tmp[k_old]
 
     return ds
 
