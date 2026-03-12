@@ -66,6 +66,7 @@ venv.bak/
 Thumbs.db
 
 # Project specific
+.plans
 .pytensor/
 .pytest_cache/
 .coverage

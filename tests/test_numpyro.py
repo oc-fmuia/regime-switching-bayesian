@@ -11,14 +11,14 @@ numpyro = pytest.importorskip("numpyro")
 
 from src.data_gen import generate_hmm_data
 from src.inference import fit, run_ffbs
-from src.model import build_model_manual
+from src.model import build_model
 
 
 @pytest.fixture(scope="module")
 def small_manual_model():
     """Build a small manual-forward-algorithm model for numpyro tests."""
     data = generate_hmm_data(T=30, K=2, d=2, seed=42)
-    model = build_model_manual(data["returns"], K=2)
+    model = build_model(data["returns"], K=2)
     return data, model
 
 

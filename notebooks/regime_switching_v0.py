@@ -35,7 +35,7 @@ def _():
         fit,
         run_ffbs,
     )
-    from src.model import build_model, build_model_manual
+    from src.model import build_model
     from src.plotting import (
         plot_posterior_summary,
         plot_regime_probabilities,
@@ -46,7 +46,6 @@ def _():
         align_regime_samples,
         az,
         build_model,
-        build_model_manual,
         check_diagnostics_label_aware,
         fit,
         generate_hmm_data,
@@ -116,8 +115,8 @@ def _(mo):
         label="Random seed",
     )
     sampler_dropdown = mo.ui.dropdown(
-        options={"PyMC (default)": "pymc", "NumPyro (JAX)": "numpyro"},
-        value="NumPyro (JAX)",
+        options={"NumPyro (JAX, default)": "numpyro", "PyMC": "pymc"},
+        value="NumPyro (JAX, default)",
         label="NUTS sampler",
     )
     mo.hstack([T_slider, seed_number, sampler_dropdown], justify="start")
@@ -247,23 +246,19 @@ def _(mo):
       `HalfNormal(0.10)` priors on the standard deviations.
     - **Observations** $\mathbf{y}_t \mid s_t = k \sim \mathcal{N}(\boldsymbol{\mu}_k, \boldsymbol{\Sigma}_k)$.
 
-    The discrete chain $s_{1:T}$ is **marginalized out** so that NUTS
-    only sees continuous parameters.  With the default PyMC sampler this
-    uses `pymc_extras.marginalize`; with the NumPyro (JAX) sampler a
-    manual forward algorithm via `pytensor.scan` is used instead, since
-    the `pmx.marginalize` graph contains ops that JAX cannot trace.
+    The discrete chain $s_{1:T}$ is **marginalized out** via a manual
+    forward algorithm (`pytensor.scan`) so that NUTS only sees continuous
+    parameters.  Under the NumPyro/JAX backend (the default) this
+    compiles to `jax.lax.scan`, giving a significant speed-up over the
+    PyMC C backend.
     """)
     return
 
 
 @app.cell
-def _(build_model, build_model_manual, data, sampler_dropdown):
-    if sampler_dropdown.value == "numpyro":
-        model_marg = build_model_manual(data["returns"], K=2)
-        model = model_marg  # manual model is already marginalized
-    else:
-        model, model_marg = build_model(data["returns"], K=2)
-    return model, model_marg
+def _(build_model, data):
+    model = build_model(data["returns"], K=2)
+    return (model,)
 
 
 @app.cell
@@ -273,9 +268,9 @@ def _(mo, model):
     try:
         graph = pm.model_to_graphviz(model)
         mo.md(
-            "### Model DAG (before marginalisation)\n\n"
-            "The `chain` node is the discrete latent sequence that gets "
-            "integrated out for NUTS sampling."
+            "### Model DAG\n\n"
+            "The discrete chain has been analytically marginalised; "
+            "the `hmm_loglik` Potential encodes the forward algorithm."
         )
     except Exception:
         graph = None
@@ -307,10 +302,10 @@ def _(mo):
 
 
 @app.cell
-def _(data, fit, model_marg, sampler_dropdown):
+def _(data, fit, model, sampler_dropdown):
     _mus_init = data["params"]["mus"]  # (K, d) from the sliders
     idata = fit(
-        model_marg, draws=2000, tune=2000, chains=4, seed=42,
+        model, draws=2000, tune=2000, chains=4, seed=42,
         nuts_sampler=sampler_dropdown.value,
         initvals={"mu": _mus_init},
     )

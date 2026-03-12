@@ -20,9 +20,9 @@ from src.model import build_model
 def fitted_result():
     """Fit a small model once, reuse across tests in this module."""
     data = generate_hmm_data(T=30, K=2, d=2, seed=42)
-    _, model_marg = build_model(data["returns"], K=2)
-    idata = fit(model_marg, draws=50, tune=50, chains=1, seed=42)
-    return data, model_marg, idata
+    model = build_model(data["returns"], K=2)
+    idata = fit(model, draws=50, tune=50, chains=1, seed=42)
+    return data, model, idata
 
 
 def test_fit_runs(fitted_result):
