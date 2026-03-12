@@ -126,6 +126,7 @@ def _make_mock_posterior(K, d, n_chains=2, n_draws=5):
         (3, (2, 0, 1)),
         (3, (1, 2, 0)),
         (3, (0, 2, 1)),
+        (4, (1, 2, 3, 0)),
     ],
 )
 def test_permute_chain_chol_cov(K, perm):
@@ -158,6 +159,7 @@ def test_permute_chain_chol_cov(K, perm):
     [
         (2, (1, 0)),
         (3, (2, 0, 1)),
+        (4, (1, 2, 3, 0)),
     ],
 )
 def test_permute_chain_mu_and_P(K, perm):
