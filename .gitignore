@@ -80,6 +80,9 @@ data/
 *.h5
 *.nc
 
+# Generated figures
+docs/figures/
+
 # Notebooks
 .ipynb_checkpoints/
 
