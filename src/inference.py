@@ -282,8 +282,7 @@ def ffbs_single(
     log_alpha[0] = np.log(pi0 + 1e-300) + log_lik[0]
 
     for t in range(1, T):
-        for k in range(K):
-            log_alpha[t, k] = logsumexp(log_alpha[t - 1] + log_P[:, k]) + log_lik[t, k]
+        log_alpha[t] = logsumexp(log_alpha[t - 1, :, None] + log_P, axis=0) + log_lik[t]
 
     # Backward sampling
     regimes = np.empty(T, dtype=int)
@@ -344,11 +343,12 @@ def _batch_extract_chol_covs(
                 chol_all[:, :, k] = vals
             elif vals.shape[-1] == n_packed:
                 tril_idx = np.tril_indices(d)
-                for c in range(n_chains):
-                    for s in range(n_draws):
-                        chol_all[c, s, k][tril_idx] = vals[c, s]
+                chol_all[:, :, k, tril_idx[0], tril_idx[1]] = vals
             break
     return chol_all
+
+
+_ALIGN_MAX_BYTES = 512 * 1024 * 1024  # 512 MB
 
 
 def align_regime_samples(regime_samples: np.ndarray, K: int = 2) -> np.ndarray:
@@ -366,33 +366,43 @@ def align_regime_samples(regime_samples: np.ndarray, K: int = 2) -> np.ndarray:
     Returns
     -------
     aligned : same shape, with per-chain labels remapped
+
+    Notes
+    ------
+    Internally broadcasts all K! permutations at once via a (K!, n_draws, T)
+    array. Raises ValueError if the estimated allocation would exceed
+    _ALIGN_MAX_BYTES (default 512 MB) to prevent OOM on large K or T.
     """
+    import math
     from itertools import permutations
 
+    n_chains, n_draws, T = regime_samples.shape
+
+    estimated_bytes = math.factorial(K) * n_draws * T * regime_samples.dtype.itemsize
+    if estimated_bytes > _ALIGN_MAX_BYTES:
+        raise ValueError(
+            f"align_regime_samples: vectorized permutation search would allocate "
+            f"{estimated_bytes / 1e9:.2f} GB (K={K}, K!={math.factorial(K)}, "
+            f"n_draws={n_draws}, T={T}, itemsize={regime_samples.dtype.itemsize}B). "
+            f"Limit is {_ALIGN_MAX_BYTES / 1e9:.2f} GB. "
+            f"Reduce K, increase the thinning factor in run_ffbs, or raise "
+            f"_ALIGN_MAX_BYTES if you are sure the allocation is safe."
+        )
+
     aligned = regime_samples.copy()
-    n_chains = aligned.shape[0]
     if n_chains <= 1:
         return aligned
 
+    all_perms = np.array(list(permutations(range(K))))  # (K!, K)
     ref = aligned[0]
 
     for c in range(1, n_chains):
-        best_perm = None
-        best_agreement = -1.0
-        for perm in permutations(range(K)):
-            remapped = aligned[c].copy()
-            for k_new, k_old in enumerate(perm):
-                remapped[regime_samples[c] == k_old] = k_new
-            agreement = (remapped == ref).mean()
-            if agreement > best_agreement:
-                best_agreement = agreement
-                best_perm = perm
-
+        all_remapped = all_perms[:, aligned[c]]                    # (K!, n_draws, T)
+        agreements = (all_remapped == ref).mean(axis=(-2, -1))     # (K!,)
+        best_idx = int(np.argmax(agreements))
+        best_perm = tuple(all_perms[best_idx].tolist())
         if best_perm != tuple(range(K)):
-            remapped = aligned[c].copy()
-            for k_new, k_old in enumerate(best_perm):
-                remapped[regime_samples[c] == k_old] = k_new
-            aligned[c] = remapped
+            aligned[c] = all_perms[best_idx][aligned[c]]
 
     return aligned
 

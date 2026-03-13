@@ -5,7 +5,9 @@ import pytest
 
 from src.data_gen import generate_hmm_data
 from src.inference import (
+    _ALIGN_MAX_BYTES,
     _permute_chain,
+    align_regime_samples,
     check_diagnostics,
     check_diagnostics_label_aware,
     ffbs_single,
@@ -182,3 +184,53 @@ def test_permute_chain_mu_and_P(K, perm):
         result["P"].values[chain_idx],
         orig_P[:, perm_arr, :][:, :, perm_arr],
     )
+
+
+def test_align_regime_samples_no_switch():
+    """When all chains are identical the identity permutation wins: output equals input."""
+    rng = np.random.default_rng(0)
+    single = rng.integers(0, 2, size=(1, 10, 50))
+    samples = np.repeat(single, 3, axis=0)  # (3, 10, 50) — all chains identical
+    aligned = align_regime_samples(samples, K=2)
+    np.testing.assert_array_equal(aligned, samples)
+
+
+def test_align_regime_samples_k2_swap():
+    """Chain 1 is perfectly flipped relative to chain 0: swap should be detected."""
+    ref = np.array([[[0, 1, 0, 0, 1, 1, 0, 1, 0, 1]] * 5])  # (1, 5, 10)
+    flipped = 1 - ref
+    samples = np.concatenate([ref, flipped], axis=0)          # (2, 5, 10)
+    aligned = align_regime_samples(samples, K=2)
+    np.testing.assert_array_equal(aligned[0], aligned[1])
+
+
+def test_align_regime_samples_k3_cycle():
+    """Chain 1 has labels cyclically shifted: (0→1, 1→2, 2→0) should be undone."""
+    rng = np.random.default_rng(7)
+    ref = rng.integers(0, 3, size=(1, 8, 40))                 # (1, 8, 40)
+    cycle = np.array([1, 2, 0])
+    shifted = cycle[ref]                                        # (1, 8, 40)
+    samples = np.concatenate([ref, shifted], axis=0)           # (2, 8, 40)
+    aligned = align_regime_samples(samples, K=3)
+    np.testing.assert_array_equal(aligned[0], aligned[1])
+
+
+def test_align_regime_samples_single_chain():
+    """Single chain must be returned unchanged."""
+    rng = np.random.default_rng(1)
+    samples = rng.integers(0, 2, size=(1, 10, 30))
+    aligned = align_regime_samples(samples, K=2)
+    np.testing.assert_array_equal(aligned, samples)
+
+
+def test_align_regime_samples_memory_guard():
+    """Raise ValueError when estimated allocation exceeds _ALIGN_MAX_BYTES."""
+    import math
+
+    K = 2
+    itemsize = np.dtype(int).itemsize
+    # Compute n_draws * T that would just exceed the limit
+    n_draws = math.ceil(_ALIGN_MAX_BYTES / (math.factorial(K) * 1 * itemsize)) + 1
+    samples = np.zeros((2, n_draws, 1), dtype=int)
+    with pytest.raises(ValueError, match="align_regime_samples"):
+        align_regime_samples(samples, K=K)
