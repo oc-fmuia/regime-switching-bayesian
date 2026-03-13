@@ -6,7 +6,7 @@ automatic marginalization engine. Each test is self-contained and
 documents whether the pattern works or fails (and how).
 
 Run with:
-    pixi run -e dev pytest src/marginalization_engine/test_marginalization.py -v -s
+    pixi run -e dev pytest docs/research/marginalization_engine/test_marginalization.py -v -s
 
 The tests are ordered from simplest to most complex:
     1. Univariate Normal emission (baseline, known to work)
