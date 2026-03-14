@@ -84,3 +84,4 @@ disallow_untyped_defs = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--cov=regime_switching_bayesian --cov-report=term-missing"
+markers = ["slow: marks tests as slow (deselect with -m 'not slow')"]

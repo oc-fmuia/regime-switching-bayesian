@@ -58,6 +58,9 @@ def build_model(
     with pm.Model() as model:
         P = pm.Dirichlet("P", a=sticky_alpha, shape=(K, K))
         log_P = pt.log(P)
+        # FM-NOTE: pi0 is fixed to uniform (v0 simplification; see math_spec_v0 Section 10).
+        # data_gen.py uses pi0=[0.8, 0.2] by default, so for short series (T < ~50) there
+        # is a prior mismatch between the generative model and inference. Negligible for T >= 100.
         log_pi0 = pt.log(pt.ones(K) / K)
 
         mu = pm.Normal("mu", mu=0.0, sigma=mu_prior_sigma, shape=(K, d))
@@ -103,6 +106,7 @@ def build_model(
             return_updates=False,
         )
 
-        pm.Potential("hmm_loglik", pt.logsumexp(log_alphas[-1]))
+        # log_alphas has shape (T-1, K); [-1] selects log α_T, the final forward variable
+        pm.Potential("hmm_loglik", pt.logsumexp(log_alphas[-1], axis=0))
 
     return model

@@ -38,24 +38,40 @@ def generate_hmm_data(
     rng = np.random.default_rng(seed)
 
     if mus is None:
+        if K != 2:
+            raise ValueError(
+                f"Default mus is only defined for K=2. Pass an explicit (K, d) array for K={K}."
+            )
         bull_base = np.array([0.01, 0.008, 0.012])
         bear_base = np.array([-0.005, -0.008, -0.003])
         mus = np.vstack([
             np.resize(bull_base, d),
             np.resize(bear_base, d),
-        ])[:K]
+        ])
     if sigmas is None:
+        if K != 2:
+            raise ValueError(
+                f"Default sigmas is only defined for K=2. Pass an explicit (K, d) array for K={K}."
+            )
         bull_vol = np.array([0.04, 0.035, 0.045])
         bear_vol = np.array([0.08, 0.09, 0.10])
         sigmas = np.vstack([
             np.resize(bull_vol, d),
             np.resize(bear_vol, d),
-        ])[:K]
+        ])
     if corr_chols is None:
         corr_chols = np.stack([np.eye(d)] * K)
     if P is None:
+        if K != 2:
+            raise ValueError(
+                f"Default P is only defined for K=2. Pass an explicit (K, K) transition matrix for K={K}."
+            )
         P = np.array([[0.95, 0.05], [0.10, 0.90]])
     if pi0 is None:
+        if K != 2:
+            raise ValueError(
+                f"Default pi0 is only defined for K=2. Pass an explicit (K,) initial distribution for K={K}."
+            )
         pi0 = np.array([0.8, 0.2])
 
     # cov_k = diag(sigma_k) @ L_k @ L_k^T @ diag(sigma_k)
