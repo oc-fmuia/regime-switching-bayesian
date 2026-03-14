@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from src.data_gen import generate_hmm_data
-from src.inference import (
+from regime_switching_bayesian.data_gen import generate_hmm_data
+from regime_switching_bayesian.inference import (
     _ALIGN_MAX_BYTES,
     _permute_chain,
     align_regime_samples,
@@ -15,7 +15,7 @@ from src.inference import (
     run_ffbs,
     stationary_distribution,
 )
-from src.model import build_model
+from regime_switching_bayesian.model import build_model
 
 
 @pytest.fixture(scope="module")

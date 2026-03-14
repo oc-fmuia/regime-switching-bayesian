@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.data_gen import generate_hmm_data
+from regime_switching_bayesian.data_gen import generate_hmm_data
 
 
 @pytest.fixture
