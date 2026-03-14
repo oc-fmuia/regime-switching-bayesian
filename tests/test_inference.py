@@ -73,6 +73,21 @@ def test_ffbs_single_known_params():
     assert accuracy > 0.70, f"FFBS accuracy too low: {accuracy:.2f}"
 
 
+def test_ffbs_single_default_pi0():
+    data = generate_hmm_data(T=50, K=2, d=2, seed=0)
+    params = data["params"]
+    K, d = params["mus"].shape
+    chol_covs = np.zeros((K, d, d))
+    for k in range(K):
+        chol_covs[k] = np.linalg.cholesky(params["covs"][k])
+    regimes = ffbs_single(
+        data["returns"], params["P"], params["mus"], chol_covs,
+        rng=np.random.default_rng(0),
+    )
+    assert regimes.shape == (50,)
+    assert set(np.unique(regimes)).issubset({0, 1})
+
+
 def test_run_ffbs_shapes(fitted_result):
     data, _, idata = fitted_result
     regime_samples = run_ffbs(idata, data["returns"], seed=42, thin=1, verbose=False)

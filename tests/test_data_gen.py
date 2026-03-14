@@ -1,6 +1,7 @@
 """Tests for synthetic data generation (Step 1)."""
 
 import numpy as np
+import pytest
 from scipy import stats
 
 from regime_switching_bayesian.data_gen import generate_hmm_data
@@ -55,3 +56,8 @@ def test_covariance_positive_definite():
     for k in range(2):
         eigvals = np.linalg.eigvalsh(data["params"]["covs"][k])
         assert np.all(eigvals > 0), f"Covariance for regime {k} is not positive definite"
+
+
+def test_k_gt2_no_explicit_params_raises():
+    with pytest.raises(ValueError, match="K=2"):
+        generate_hmm_data(T=30, K=3, d=3)
