@@ -284,18 +284,17 @@ def ffbs_single(
 
     log_P = np.log(P + 1e-300)
 
-    # Forward pass: log_alpha[t, k] = log p(y_{1:t}, s_t=k)
     log_alpha = np.empty((T, K))
     log_alpha[0] = np.log(pi0 + 1e-300) + log_lik[0]
+    log_alpha[0] -= logsumexp(log_alpha[0])
 
     for t in range(1, T):
         for k in range(K):
             log_alpha[t, k] = logsumexp(log_alpha[t - 1] + log_P[:, k]) + log_lik[t, k]
+        log_alpha[t] -= logsumexp(log_alpha[t])
 
-    # Backward sampling
     regimes = np.empty(T, dtype=int)
-    log_gamma = log_alpha[T - 1] - logsumexp(log_alpha[T - 1])
-    regimes[T - 1] = rng.choice(K, p=np.exp(log_gamma))
+    regimes[T - 1] = rng.choice(K, p=np.exp(log_alpha[T - 1]))
 
     for t in range(T - 2, -1, -1):
         log_gamma = log_alpha[t] + log_P[:, regimes[t + 1]]
@@ -448,16 +447,16 @@ def forward_filter_probs(
 
             log_alpha = np.empty((T, K))
             log_alpha[0] = np.log(pi0 + 1e-300) + log_lik[0]
+            log_alpha[0] -= logsumexp(log_alpha[0])
 
             for t in range(1, T):
                 for k in range(K):
                     log_alpha[t, k] = (
                         logsumexp(log_alpha[t - 1] + log_P[:, k]) + log_lik[t, k]
                     )
+                log_alpha[t] -= logsumexp(log_alpha[t])
 
-            for t in range(T):
-                probs_t = np.exp(log_alpha[t] - logsumexp(log_alpha[t]))
-                accum[t] += probs_t
+            accum += np.exp(log_alpha)
             count += 1
 
     return accum / count

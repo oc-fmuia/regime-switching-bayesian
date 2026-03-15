@@ -29,7 +29,6 @@ def _():
 
     from src.data_gen import generate_hmm_data
     from src.inference import (
-        align_regime_samples,
         check_diagnostics_label_aware,
         fit,
         forward_filter_probs,
@@ -43,7 +42,6 @@ def _():
     )
 
     return (
-        align_regime_samples,
         az,
         build_model,
         check_diagnostics_label_aware,
@@ -65,48 +63,62 @@ def _(mo):
     mo.md(r"""
     # Bayesian Regime-Switching for Equity Returns
 
-    You manage a multi-asset portfolio.  Your risk model uses a single mean
-    vector and a single covariance matrix estimated over a long history.
-    In calm markets, it overstates volatility and leaves return on the table.
-    In a crisis, it understates tail risk — and the drawdown arrives before
-    the model catches up.
+    > **When do equity markets shift from expansion to stress, and can a
+    > portfolio respond before the drawdown has already materialised?**
 
-    The core issue is that **markets do not live in one statistical regime**.
-    Bull phases feature moderate drift, compressed volatility, and benign
-    correlations.  Bear phases bring negative drift, volatility spikes, and
+    Standard risk models estimate a single mean vector and a single
+    covariance matrix from a long history of returns.  During calm markets
+    this approach overstates volatility and leaves return on the table;
+    during a crisis it understates tail risk because the long-window
+    average dilutes the signal from the current environment.  The root
+    cause is that **financial returns do not come from one statistical
+    regime**: bull phases feature moderate drift and compressed volatility,
+    while bear phases bring negative drift, volatility spikes, and
     correlation convergence toward one.  A model that averages across these
     environments mis-prices risk in both.
 
-    A **regime-switching model** addresses this directly.  Instead of one
-    distribution, it learns $K$ distinct distributions — one per regime —
-    together with a transition matrix that governs how the market moves
-    between them.  At every point in time it produces a *probability* of
-    being in each regime, not a binary label, giving the portfolio manager
-    a calibrated, time-varying risk lens.
+    A **regime-switching model** replaces the single distribution with $K$
+    distinct distributions, one per regime, together with a transition
+    matrix $\mathbf{P}$ that governs how the market moves between them.
+    At every point in time the model produces a *probability* of being in
+    each regime rather than a binary label, giving the portfolio manager a
+    calibrated, time-varying risk lens.  In this notebook we build such a
+    model as a Bayesian Hidden Markov Model (HMM) using
+    [PyMC](https://www.pymc.io/), fit it via the No-U-Turn Sampler (NUTS),
+    and recover the latent regime sequence with a backward-sampling pass
+    that reconstructs the most likely state at each point in time.
 
-    This notebook is the first in a series that builds this framework from
-    the ground up using Bayesian inference:
+    ### Series roadmap
 
-    1. **The Problem and the Model** — *this notebook.*  Build a 2-regime
-       HMM for equity returns, fit it with NUTS, recover regimes via FFBS,
-       and show a simple regime-aware allocation demo.
-    2. **Model Validation** — prior and posterior predictive checks.
-       Verify that the priors produce plausible data and that the fitted
-       model reproduces observed return features (Bayesian p-values,
-       BDA3 Ch. 6).
-    3. **Multi-Asset Extension** — extend to an equity-bond-gold universe
-       with regime-dependent correlations.  Address the correlation-masking
-       problem and its implications for hedge ratios.
-    4. **Portfolio Analytics** — translate posterior uncertainty into
-       VaR, CVaR, regime-conditional correlations, and hedge ratio
-       implications.
-    5. **Model Comparison** — $K = 1$ vs $K = 2$ vs $K = 3$ via WAIC.
-       Introduce the 3-regime scenario and discuss honest uncertainty
-       (Vehtari, Gelman & Gabry, 2017).
-    6. **Real Data Application** — apply the pipeline to S&P 500,
-       long-duration Treasuries, and gold (2000–2025).
-    7. **Extensions** — Student-$t$ emissions, factor covariance
-       structure, time-varying transition probabilities.
+    This is the first instalment of a series that builds the
+    regime-switching framework from the ground up.  Each notebook extends
+    the previous one, so the reader accumulates both the statistical
+    machinery and the portfolio intuition needed to apply the model to real
+    data.
+
+    1. **The problem and the model** (*this notebook*) establishes the core
+       two-regime HMM on synthetic equity data, demonstrates that the
+       Bayesian posterior recovers the true generating parameters, and
+       provides a proof-of-concept regime-aware allocation strategy.
+    2. **Model validation** adds prior and posterior predictive checks,
+       ensuring that the fitted model can reproduce the salient features
+       of the observed return distribution rather than merely fitting in
+       sample (Bayesian p-values, BDA3 Ch. 6).
+    3. **Multi-asset extension** moves from an equity-only universe to
+       equities, bonds, and gold with regime-dependent correlations,
+       addressing the correlation-masking problem that is central to hedge
+       ratio construction.
+    4. **Portfolio analytics** translates the posterior into actionable risk
+       measures: regime-conditional VaR, CVaR, and hedge ratio
+       distributions, all with full parameter uncertainty propagated.
+    5. **Model comparison** evaluates $K = 1$ vs $K = 2$ vs $K = 3$ via
+       WAIC, quantifying whether the additional complexity of a third
+       regime is warranted by the data (Vehtari, Gelman & Gabry, 2017).
+    6. **Real data application** applies the full pipeline to S&P 500,
+       long-duration Treasuries, and gold from 2000 to 2025.
+    7. **Extensions** explores Student-$t$ emissions for within-regime fat
+       tails, factor covariance structure, and time-varying transition
+       probabilities.
 
     **References.**
     Hamilton (1989), *Econometrica*;
@@ -119,25 +131,30 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## The statistical question
+    ## From a portfolio question to a statistical model
 
-    > **Can we identify structurally distinct market regimes from equity
-    > return data alone, and if so, what do the regime-conditional parameters
-    > imply for portfolio construction?**
+    > **"My risk model treats 2008 and 2017 as the same market.  How can I
+    > let the data tell me which environment we are in right now?"**
 
-    Traditional portfolio models assume returns are drawn from a single
-    multivariate distribution — one mean vector $\boldsymbol{\mu}$ and one
-    covariance matrix $\boldsymbol{\Sigma}$.  This assumption fails when the
-    data-generating process switches between distinct economic environments.
-    Hamilton (1989) introduced the Markov-switching framework for business-cycle
-    analysis; Ang & Bekaert (2002) showed that accounting for regimes
-    materially changes optimal asset allocation and risk measurement.
+    This is fundamentally a question about **latent structure**: the data
+    contain returns, but the underlying market regime is unobserved.
+    Traditional portfolio models assume that returns are drawn from a single
+    multivariate distribution with one mean vector $\boldsymbol{\mu}$ and
+    one covariance matrix $\boldsymbol{\Sigma}$.  This assumption fails
+    whenever the data-generating process switches between distinct economic
+    environments.  Hamilton (1989) introduced the Markov-switching framework
+    for business-cycle analysis, and Ang & Bekaert (2002) showed that
+    accounting for regimes materially changes both optimal asset allocation
+    and risk measurement.
 
-    A **Hidden Markov Model (HMM)** with $K$ latent states provides a principled
-    framework: conditioned on the state, returns follow a regime-specific
-    multivariate Normal, and the states evolve as a first-order Markov chain.
-    Bayesian inference propagates uncertainty about *which regime is active at
-    each point in time* directly into posterior quantities, avoiding the false
+    A **Hidden Markov Model (HMM)** with $K$ latent states translates the
+    portfolio question into a well-posed inference problem: conditioned on
+    the state, returns follow a regime-specific multivariate Normal
+    ($\mathbf{y}_t \mid s_t = k \sim \mathcal{N}(\boldsymbol{\mu}_k,
+    \boldsymbol{\Sigma}_k)$), and the states evolve as a first-order Markov
+    chain ($P(s_t \mid s_{t-1}) = P_{s_{t-1}, s_t}$).  Bayesian inference
+    then propagates uncertainty about *which regime is active at each point
+    in time* directly into posterior quantities, avoiding the false
     precision of point estimates.
     """)
     return
@@ -148,8 +165,8 @@ def _(mo):
     mo.md(r"""
     ## Synthetic data
 
-    We work with three synthetic equity indices — **US Equity**, **EAFE
-    Equity** (developed international), and **EM Equity** (emerging
+    We work with three synthetic equity indices, namely **US Equity**,
+    **EAFE Equity** (developed international), and **EM Equity** (emerging
     markets).  All three share the same two-regime structure: a
     **bull** regime with moderate positive drift and low volatility, and a
     **bear** regime with negative drift and elevated volatility.
@@ -207,18 +224,21 @@ def _(mo):
     | $\boldsymbol{\Sigma}_k$ | Full covariance matrix | Determines the joint return distribution in regime $k$ |
 
     **Simplifying assumption in this notebook:** we set $\mathbf{R}_k = \mathbf{I}$
-    (the identity matrix) for every regime.  This means assets are
-    **conditionally independent given the regime** — within a given market
-    regime, knowing that US equities dropped today tells you nothing extra
-    about EM equities beyond what the regime label itself already implies.
-    All observed co-movement in the data comes from the shared regime, not
-    from within-regime correlation.
+    (the identity matrix) for every regime, so that
+    $\boldsymbol{\Sigma}_k = \mathbf{D}_k^2 = \mathrm{diag}(\sigma_{k,1}^2,
+    \ldots, \sigma_{k,d}^2)$.
+    This implies **conditional independence given the regime**:
+    $y_{t,i} \perp y_{t,j} \mid s_t$ for $i \neq j$.  In practical terms,
+    within a given market regime, knowing that US equities dropped today
+    tells you nothing extra about EM equities beyond what the regime label
+    itself already implies.  All observed co-movement in the data comes
+    from the shared regime, not from within-regime correlation.
 
     This is a deliberate simplification that keeps inference fast and focused
     on learning the regime means, volatilities, and transition dynamics.
     A later notebook in this series introduces $\mathbf{R}_k \neq \mathbf{I}$
-    with regime-dependent correlations — the harder problem at the heart of
-    portfolio risk management.
+    with regime-dependent correlations, which is the harder problem at the
+    heart of portfolio risk management.
     """)
     return
 
@@ -276,20 +296,6 @@ def _(asset_names, mo):
         for a, v in zip(asset_names, _bear_vol_defaults)
     ]
 
-    _slider_specs = [
-        ("Bull μ", 0.0, 0.05, 0.001, _bull_mu_defaults),
-        ("Bear μ", -0.05, 0.0, 0.001, _bear_mu_defaults),
-        ("Bull σ", 0.01, 0.10, 0.005, _bull_vol_defaults),
-        ("Bear σ", 0.02, 0.20, 0.005, _bear_vol_defaults),
-    ]
-    _param_rows = []
-    for _prefix, _lo, _hi, _step, _defaults in _slider_specs:
-        for _a, _v in zip(asset_names, _defaults):
-            _param_rows.append(
-                f"| {_prefix} – {_a} | {_lo} | {_hi} | {_step} | {_v} |"
-            )
-    _param_table = "\n".join(_param_rows)
-
     mo.vstack([
         mo.md("### Regime parameters (data generation)"),
         mo.md("**Bull (growth) regime**"),
@@ -298,15 +304,6 @@ def _(asset_names, mo):
         mo.md("**Bear (stress) regime**"),
         mo.hstack(bear_mean_sliders, justify="start"),
         mo.hstack(bear_vol_sliders, justify="start"),
-        mo.md(
-            f"""
-**Parameter ranges**
-
-| Parameter | Min | Max | Step | Default |
-|-----------|-----|-----|------|---------|
-{_param_table}
-            """
-        ),
     ])
     return (
         bear_mean_sliders,
@@ -314,6 +311,43 @@ def _(asset_names, mo):
         bull_mean_sliders,
         bull_vol_sliders,
     )
+
+
+@app.cell
+def _(
+    asset_names,
+    bear_mean_sliders,
+    bear_vol_sliders,
+    bull_mean_sliders,
+    bull_vol_sliders,
+    mo,
+):
+    _slider_specs = [
+        ("Bull μ", bull_mean_sliders),
+        ("Bear μ", bear_mean_sliders),
+        ("Bull σ", bull_vol_sliders),
+        ("Bear σ", bear_vol_sliders),
+    ]
+    _param_rows = []
+    for _prefix, _sliders in _slider_specs:
+        for _a, _s in zip(asset_names, _sliders):
+            _param_rows.append(
+                f"| {_prefix} – {_a} "
+                f"| {_s.start} | {_s.stop} | {_s.step} "
+                f"| {_s.value} |"
+            )
+    _param_table = "\n".join(_param_rows)
+
+    mo.md(
+        f"""
+**Selected parameter values**
+
+| Parameter | Min | Max | Step | Selected |
+|-----------|-----|-----|------|----------|
+{_param_table}
+        """
+    )
+    return
 
 
 @app.cell
@@ -371,11 +405,13 @@ def _(asset_names, data, mo, np):
 
 **T** = {_c['T']} months, **d** = {_c['d']} assets, **seed** = {_c['seed']}.
 
-The bull regime has moderate positive drift and low volatility.  The bear
-regime features negative drift across all equities and roughly doubled
-volatility — the classic growth/stress dichotomy.  Assets are conditionally
-uncorrelated given the regime (identity correlation matrices); a later
-notebook in this series introduces regime-dependent cross-asset correlations.
+The bull regime has moderate positive drift and low volatility, while the
+bear regime features negative drift across all equities and roughly doubled
+volatility, i.e. the classic growth/stress dichotomy.  Assets are
+conditionally uncorrelated given the regime
+($\\mathbf{{R}}_k = \\mathbf{{I}}$, i.e.
+$y_{{t,i}} \\perp y_{{t,j}} \\mid s_t$); a later notebook in this series
+introduces regime-dependent cross-asset correlations.
         """
     )
     return
@@ -456,9 +492,9 @@ def _(asset_names, data, mo, np):
 ### Interpreting the regime-conditional distributions
 
 Each panel above shows the **regime-conditional marginal**
-$p(y_{{t,i}} \\mid s_t = k)$ — the distribution of asset $i$'s monthly
-return given the market is in regime $k$.  These are the building blocks
-the model must learn: one distribution per asset per regime.
+$p(y_{{t,i}} \\mid s_t = k)$, i.e. the distribution of asset $i$'s
+monthly return given the market is in regime $k$.  These are the building
+blocks the model must learn: one distribution per asset per regime.
 
 **Sample statistics from the generated data** ({_n_bull} bull months,
 {_n_bear} bear months):
@@ -472,8 +508,8 @@ while the bear distributions are shifted left (negative mean) with roughly
 double the spread.  This is consistent with the generating parameters and
 confirms the data exhibit the regime structure we expect.
 
-The **overlap region** between the two KDEs — where the green and red
-densities intersect — is where regime classification is most uncertain.
+The **overlap region** between the two KDEs, i.e. where the green and
+red densities intersect, is where regime classification is most uncertain.
 Returns in that overlap could plausibly come from either regime, and the
 model will assign intermediate posterior probabilities at those time steps.
         """
@@ -561,8 +597,8 @@ def _(mo):
     ### Model DAG
 
     The diagram below shows the model's dependency structure.  The
-    discrete regime chain $s_{1:T}$ does not appear as a node — it has been
-    analytically marginalised.  The `hmm_loglik` Potential encodes
+    discrete regime chain $s_{1:T}$ does not appear as a node because it
+    has been analytically marginalised.  The `hmm_loglik` Potential encodes
     the forward-algorithm log-likelihood as a scalar contribution
     to the joint log-density.
     """)
@@ -612,13 +648,15 @@ def _(mo):
        transition probabilities (TVTP) relax this.
 
     3. **$K = 2$ regimes.**
-       $K$ is fixed a priori, not a random variable — it is not inferred
-       from the data.  Bayesian model comparison via WAIC can
-       evaluate whether $K = 2$ is adequate relative to $K = 1$ or $K = 3$.
+       $K$ is fixed a priori, i.e. it is a modelling choice rather than a
+       quantity inferred from the data.  Bayesian model comparison via WAIC
+       can evaluate whether $K = 2$ is adequate relative to $K = 1$ or
+       $K = 3$.
 
     4. **Conditional independence across time.**
-       $\mathbf{y}_t \perp \mathbf{y}_{t-1} \mid s_t$ — given the current
-       regime, today's return is independent of yesterday's.  This rules out
+       $\mathbf{y}_t \perp \mathbf{y}_{t-1} \mid s_t$, i.e. given the
+       current regime, today's return is independent of yesterday's.
+       This rules out
        within-regime momentum or mean-reversion effects (Hamilton's original
        1989 model used AR(4) dynamics within each regime).
     """)
@@ -696,6 +734,33 @@ def _(check_diagnostics_label_aware, idata, mo):
 
 
 @app.cell
+def _(data, diag, np):
+    aligned_idata = diag["aligned_idata"]
+
+    _mu_post = aligned_idata.posterior["mu"].values.mean(axis=(0, 1))
+    bear_idx = int(np.argmin(_mu_post.sum(axis=1)))
+    bull_idx = 1 - bear_idx
+
+    perm = [0, 0]
+    perm[bear_idx] = 1
+    perm[bull_idx] = 0
+
+    label_for = {bear_idx: "Bear", bull_idx: "Bull"}
+
+    true_mus_matched = data["params"]["mus"][perm]
+    true_P_matched = data["params"]["P"][np.ix_(perm, perm)]
+    return (
+        aligned_idata,
+        bear_idx,
+        bull_idx,
+        label_for,
+        perm,
+        true_P_matched,
+        true_mus_matched,
+    )
+
+
+@app.cell
 def _(az, idata, plt):
     fig_trace, _ = plt.subplots()
     plt.close(fig_trace)
@@ -713,9 +778,9 @@ def _(mo):
     posterior density for each parameter element; the right column shows the
     sampled values across iterations.  Overlapping chains in the trace
     indicate good mixing.  With $K = 2$ regimes and no hard ordering
-    constraint, some chains may **label-switch** — producing bimodal
-    marginals.  This is a cosmetic artefact (see **Appendix B**), not a
-    sampling failure.
+    constraint, some chains may **label-switch**, producing bimodal
+    marginals that are a cosmetic artefact of the likelihood symmetry (see
+    **Appendix B**) rather than a sampling failure.
     """)
     return
 
@@ -741,9 +806,8 @@ def _(mo):
 
 
 @app.cell
-def _(align_regime_samples, data, idata, run_ffbs):
-    _raw = run_ffbs(idata, data["returns"], seed=42)
-    regime_samples = align_regime_samples(_raw, K=2)
+def _(aligned_idata, data, run_ffbs):
+    regime_samples = run_ffbs(aligned_idata, data["returns"], seed=42)
     return (regime_samples,)
 
 
@@ -759,11 +823,11 @@ def _(data, plot_regime_probabilities, plt, regime_samples):
 
 
 @app.cell
-def _(data, mo, np, regime_samples):
+def _(bear_idx, data, mo, np, perm, regime_samples):
     _flat = regime_samples.reshape(-1, regime_samples.shape[-1])
     _T = _flat.shape[1]
 
-    _bear_prob = (_flat == 1).mean(axis=0)
+    _bear_prob = (_flat == bear_idx).mean(axis=0)
 
     _true_reg = data["regimes"]
     _transitions = np.where(np.diff(_true_reg) != 0)[0]
@@ -775,9 +839,8 @@ def _(data, mo, np, regime_samples):
     _modal = np.array(
         [np.bincount(_flat[:, t], minlength=2).argmax() for t in range(_T)]
     )
-    _acc_direct = np.mean(_modal == _true_reg)
-    _acc_flipped = np.mean((1 - _modal) == _true_reg)
-    accuracy = max(_acc_direct, _acc_flipped)
+    _modal_mapped = np.array([perm[m] for m in _modal])
+    accuracy = float(np.mean(_modal_mapped == _true_reg))
 
     mo.md(
         f"""
@@ -793,14 +856,14 @@ is the true generating regime.
   The model correctly identifies the regime at almost every time step.
 - **Transition detection:** The data contain **{_n_transitions}** true regime
   transitions.  Posterior uncertainty concentrates at these transition
-  points — exactly where the model *should* be least certain.
+  points, which is exactly where the model *should* be least certain.
 - **Uncertain periods:** {_n_uncertain} out of {_T} months have
   $P(\\text{{Bear}}) \\in (0.2, 0.8)$, reflecting genuine ambiguity at
   regime boundaries.
 
 This accuracy metric is only possible because we use synthetic data with
 known ground-truth regimes.  With real market data, the posterior
-probability bands are the primary output — they express the model's
+probability bands are the primary output: they express the model's
 belief about the current regime *and* its uncertainty, without requiring
 knowledge of the true state.
         """
@@ -817,15 +880,15 @@ def _(mo):
     As a proof of concept, consider a simple rule applied to **US Equity**:
 
     - **Regime-aware strategy:** At each month $t$, use the *filtered*
-      probability $P(s_{t-1} = \text{Bear} \mid \mathbf{y}_{1:t-1})$ —
-      which depends only on data available *before* time $t$ — to set the
+      probability $P(s_{t-1} = \text{Bear} \mid \mathbf{y}_{1:t-1})$,
+      which depends only on data available *before* time $t$, to set the
       equity weight.  If $P(\text{Bear}) > 0.5$, reduce the equity
       allocation to 30% (rest in cash at 0% return).  Otherwise, hold 100%
       equity.
     - **Static benchmark:** Hold 100% equity at all times (no regime info).
 
     > **Important caveats:** (1) The posterior parameters were estimated
-    > on the *full* sample — this is an in-sample demonstration, not a
+    > on the *full* sample, so this is an in-sample demonstration, not a
     > backtest.  A proper out-of-sample P&L analysis with walk-forward
     > re-estimation will be the topic of a dedicated future blog post.
     > (2) Transaction costs and slippage are ignored.
@@ -834,15 +897,10 @@ def _(mo):
 
 
 @app.cell
-def _(data, diag, forward_filter_probs, mo, np, plt):
-    _aligned = diag["aligned_idata"]
-    _filtered = forward_filter_probs(_aligned, data["returns"], thin=10)
+def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
+    _filtered = forward_filter_probs(aligned_idata, data["returns"], thin=10)
 
-    _mu_mean = _aligned.posterior["mu"].values.mean(axis=(0, 1))
-    _bear_idx = int(np.argmin(_mu_mean.sum(axis=1)))
-    _bull_idx = 1 - _bear_idx
-
-    _bear_filt = _filtered[:, _bear_idx]
+    _bear_filt = _filtered[:, bear_idx]
 
     _returns_us = data["returns"][:, 0]
     _T_pnl = len(_returns_us)
@@ -871,7 +929,7 @@ def _(data, diag, forward_filter_probs, mo, np, plt):
 
     _ax_pnl.set_xlabel("Time (months)")
     _ax_pnl.set_ylabel("Cumulative value ($1 invested)")
-    _ax_pnl.set_title("Regime-Aware vs. Static Allocation — US Equity")
+    _ax_pnl.set_title("Regime-Aware vs. Static Allocation (US Equity)")
     _ax_pnl.legend(loc="upper left")
     _ax_pnl.set_xlim(0, _T_pnl - 1)
     fig_pnl.tight_layout()
@@ -888,16 +946,16 @@ def _(data, diag, forward_filter_probs, mo, np, plt):
 | Annualised volatility | {_vol_static:.1f}% | {_vol_aware:.1f}% |
 | Max drawdown | {_max_dd_static:+.1f}% | {_max_dd_aware:+.1f}% |
 
-The bear regime was identified as posterior regime **{_bear_idx}**
+The bear regime was identified as posterior regime **{bear_idx}**
 (the regime with lower average $\\mu$).  The strategy reduced equity
 exposure in **{_n_reduced}** out of {_T_pnl} months (light-red shading).
 
 The regime-aware strategy sacrifices some cumulative return for materially
-lower volatility and a shallower maximum drawdown — the kind of
+lower volatility and a shallower maximum drawdown, i.e. the kind of
 risk-adjusted trade-off a portfolio manager would actually evaluate.
 
-A rigorous out-of-sample evaluation — with walk-forward re-estimation,
-proper transaction cost modelling, and multiple seeds — is the subject of
+A rigorous out-of-sample evaluation with walk-forward re-estimation,
+proper transaction cost modelling, and multiple seeds is the subject of
 a future post in this series.
             """
         ),
@@ -924,39 +982,33 @@ def _(mo):
 
 
 @app.cell
-def _(asset_names, data, diag, mo, np, plot_posterior_summary):
-    _idata_plot = diag["aligned_idata"]
-
-    _mu_post = _idata_plot.posterior["mu"].values.mean(axis=(0, 1))
-    _bear_idx = int(np.argmin(_mu_post.sum(axis=1)))
-    _bull_idx = 1 - _bear_idx
-
-    _perm = [0, 0]
-    _perm[_bear_idx] = 1
-    _perm[_bull_idx] = 0
-    _true_mus_matched = data["params"]["mus"][_perm]
-    _true_P_matched = data["params"]["P"][np.ix_(_perm, _perm)]
-
-    _label_for = {_bear_idx: "Bear", _bull_idx: "Bull"}
-
+def _(
+    aligned_idata,
+    asset_names,
+    label_for,
+    mo,
+    plot_posterior_summary,
+    true_P_matched,
+    true_mus_matched,
+):
     _mu_labels = []
     for _k in range(2):
         for _a in asset_names:
-            _mu_labels.append(f"{_label_for[_k]} – {_a}")
+            _mu_labels.append(f"{label_for[_k]} – {_a}")
 
     _P_labels = []
     for _j in range(2):
         for _k in range(2):
-            _P_labels.append(f"{_label_for[_j]}→{_label_for[_k]}")
+            _P_labels.append(f"{label_for[_j]}→{label_for[_k]}")
 
     fig_mu = plot_posterior_summary(
-        _idata_plot, var_name="mu", true_values=_true_mus_matched,
+        aligned_idata, var_name="mu", true_values=true_mus_matched,
         labels=_mu_labels,
         title="Posterior: regime means (μ)",
         xlim=(-0.1, 0.1),
     )
     fig_P = plot_posterior_summary(
-        _idata_plot, var_name="P", true_values=_true_P_matched,
+        aligned_idata, var_name="P", true_values=true_P_matched,
         labels=_P_labels,
         title="Posterior: transition matrix (P)",
     )
@@ -965,21 +1017,23 @@ def _(asset_names, data, diag, mo, np, plot_posterior_summary):
 
 
 @app.cell
-def _(asset_names, az, data, diag, mo, np):
-    _idata_interp = diag["aligned_idata"]
-
-    _mu_post_mean = _idata_interp.posterior["mu"].values.mean(axis=(0, 1))
-    _bear_idx = int(np.argmin(_mu_post_mean.sum(axis=1)))
-    _bull_idx = 1 - _bear_idx
-    _perm = [0, 0]
-    _perm[_bear_idx] = 1
-    _perm[_bull_idx] = 0
-
+def _(
+    aligned_idata,
+    asset_names,
+    az,
+    bear_idx,
+    bull_idx,
+    data,
+    label_for,
+    mo,
+    np,
+    perm,
+):
     _summary_mu = az.summary(
-        _idata_interp, var_names=["mu"], hdi_prob=0.94
+        aligned_idata, var_names=["mu"], hdi_prob=0.94
     )
     _summary_P = az.summary(
-        _idata_interp, var_names=["P"], hdi_prob=0.94
+        aligned_idata, var_names=["P"], hdi_prob=0.94
     )
 
     _true_mus = data["params"]["mus"]
@@ -987,11 +1041,9 @@ def _(asset_names, az, data, diag, mo, np):
     _K = _true_mus.shape[0]
     _d = _true_mus.shape[1]
 
-    _label_for = {_bull_idx: "Bull", _bear_idx: "Bear"}
-
     _mu_rows = []
     for _k in range(_K):
-        _data_k = _perm[_k]
+        _data_k = perm[_k]
         for _i in range(_d):
             _idx = _k * _d + _i
             _row = _summary_mu.iloc[_idx]
@@ -1005,7 +1057,7 @@ def _(asset_names, az, data, diag, mo, np):
             _true_ann = _true_val * 12 * 100
             _covered = "yes" if _hdi_lo <= _true_val <= _hdi_hi else "no"
             _mu_rows.append(
-                f"| {_label_for[_k]} – {asset_names[_i]} "
+                f"| {label_for[_k]} – {asset_names[_i]} "
                 f"| {_mean_ann:+.1f}% | [{_hdi_lo_ann:+.1f}%, {_hdi_hi_ann:+.1f}%] "
                 f"| {_true_ann:+.1f}% | {_covered} |"
             )
@@ -1013,7 +1065,7 @@ def _(asset_names, az, data, diag, mo, np):
 
     _P_rows = []
     for _k in range(_K):
-        _data_k = _perm[_k]
+        _data_k = perm[_k]
         _idx_diag = _k * _K + _k
         _row = _summary_P.iloc[_idx_diag]
         _mean_p = _row["mean"]
@@ -1024,7 +1076,7 @@ def _(asset_names, az, data, diag, mo, np):
         _dur_true = 1.0 / (1.0 - _true_p) if _true_p < 1 else np.inf
         _covered = "yes" if _hdi_lo <= _true_p <= _hdi_hi else "no"
         _P_rows.append(
-            f"| $P$ ({_label_for[_k]}→{_label_for[_k]}) "
+            f"| $P$ ({label_for[_k]}→{label_for[_k]}) "
             f"| {_mean_p:.3f} | [{_hdi_lo:.3f}, {_hdi_hi:.3f}] "
             f"| {_true_p:.3f} | {_covered} "
             f"| {_dur_mean:.1f} months (true: {_dur_true:.1f}) |"
@@ -1038,8 +1090,8 @@ def _(asset_names, az, data, diag, mo, np):
 The posterior regime indices do not necessarily match the data-generation
 indices.  We identify regimes by their posterior mean: the regime with
 higher (lower) average $\\mu$ across assets is labelled Bull (Bear).
-In this run, posterior regime **{_bull_idx}** = Bull, posterior regime
-**{_bear_idx}** = Bear.
+In this run, posterior regime **{bull_idx}** = Bull, posterior regime
+**{bear_idx}** = Bear.
 
 **Regime means** (annualised):
 
@@ -1047,8 +1099,8 @@ In this run, posterior regime **{_bull_idx}** = Bull, posterior regime
 |-----------|---------------|---------|------------|----------|
 {_mu_table}
 
-All true regime means fall within their 94% HDI — the model successfully
-recovers the generating parameters.  The HDI widths reflect genuine
+All true regime means fall within their 94% HDI, confirming that the model
+successfully recovers the generating parameters.  The HDI widths reflect genuine
 uncertainty: with {data['config']['T']} months of data, the bull-regime
 means are estimated more precisely (more bull months in the sample) than
 the bear-regime means.
@@ -1075,13 +1127,14 @@ def _(mo):
     ### Looking ahead: regime-conditional correlations
 
     In this notebook the generating process uses **identity correlation
-    matrices** — assets are conditionally independent given the regime.
+    matrices**, i.e. assets are conditionally independent given the regime
+    ($y_{t,i} \perp y_{t,j} \mid s_t$).
     The model's `LKJCholeskyCov` parameterisation *can* learn non-trivial
     correlations; we have simply not exercised that capability yet.
 
     A subsequent notebook in this series introduces a multi-asset universe
-    (equities, bonds, gold) with **regime-dependent correlations** — the
-    correlation-masking problem central to portfolio risk management.
+    (equities, bonds, gold) with **regime-dependent correlations**, which
+    is the correlation-masking problem central to portfolio risk management.
     The demonstrated ability to recover distinct regime means and
     transition dynamics here is a necessary prerequisite for that harder
     problem.
@@ -1161,11 +1214,22 @@ def _(mo):
     The $\text{logsumexp}$ operation prevents numerical underflow in the
     summation over previous states.
 
-    **Marginalised log-likelihood:**
+    **Normalised recursion.**  In practice we normalise $\log\alpha_t$ at
+    each step by subtracting $c_t = \text{logsumexp}_k\,\log\alpha_{t,k}$
+    and accumulating the constants separately.  The marginalised
+    log-likelihood is then
 
     $$
-    \log p(\mathbf{y}_{1:T} \mid \theta) = \text{logsumexp}_{k}\, \log \alpha_{T,k}
+    \log p(\mathbf{y}_{1:T} \mid \theta)
+    = \sum_{t=1}^{T} c_t
+    \;+\; \text{logsumexp}_{k}\, \widetilde{\log\alpha}_{T,k}
     $$
+
+    where $\widetilde{\log\alpha}$ denotes the normalised forward
+    variable.  Without this step the un-normalised $\log\alpha_t$ drifts to
+    $\mathcal{O}(-10\,T)$ as $T$ grows, producing ill-conditioned gradients
+    through `pytensor.scan` and causing massive NUTS divergences for
+    $T \gtrsim 200$.
 
     This scalar is added to the joint log-density via a `pm.Potential`,
     enabling NUTS to explore the continuous parameter space
@@ -1199,7 +1263,7 @@ def _(mo):
     P_{jk} \to P_{\sigma(j),\sigma(k)}
     $$
 
-    for any permutation $\sigma$ of $\{0, \ldots, K{-}1\}$ — the
+    for any permutation $\sigma$ of $\{0, \ldots, K{-}1\}$, the
     likelihood is unchanged:
 
     $$
