@@ -3,8 +3,8 @@
 import numpy as np
 import pymc as pm
 
-from src.data_gen import generate_hmm_data
-from src.model import build_model
+from regime_switching_bayesian.data_gen import generate_hmm_data
+from regime_switching_bayesian.model import build_model
 
 
 def test_model_builds():

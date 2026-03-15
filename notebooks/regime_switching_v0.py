@@ -27,16 +27,16 @@ def _():
 
     sns.set_theme(style="whitegrid", palette="muted")
 
-    from src.data_gen import generate_hmm_data
-    from src.inference import (
+    from regime_switching_bayesian.data_gen import generate_hmm_data
+    from regime_switching_bayesian.inference import (
         align_regime_samples,
         check_diagnostics,
         check_diagnostics_label_aware,
         fit,
         run_ffbs,
     )
-    from src.model import build_model
-    from src.plotting import (
+    from regime_switching_bayesian.model import build_model
+    from regime_switching_bayesian.plotting import (
         plot_posterior_summary,
         plot_regime_probabilities,
         plot_returns_with_regimes,

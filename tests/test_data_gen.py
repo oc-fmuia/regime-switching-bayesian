@@ -1,8 +1,8 @@
 import numpy as np
 from scipy import stats
 
-from src.data_gen import generate_hmm_data
-from src.generate_scenarios import bull_bear_params, growth_stagnation_crisis_params
+from regime_switching_bayesian.data_gen import generate_hmm_data
+from regime_switching_bayesian.generate_scenarios import bull_bear_params, growth_stagnation_crisis_params
 
 
 def test_shapes():

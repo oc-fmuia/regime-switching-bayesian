@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from src.data_gen import generate_hmm_data
-from src.inference import check_diagnostics, fit, run_ffbs
-from src.model import build_model
+from regime_switching_bayesian.data_gen import generate_hmm_data
+from regime_switching_bayesian.inference import check_diagnostics, fit, run_ffbs
+from regime_switching_bayesian.model import build_model
 
 
 @pytest.mark.slow
