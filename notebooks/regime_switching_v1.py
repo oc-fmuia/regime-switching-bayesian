@@ -877,15 +877,38 @@ def _(mo):
     ### A realistic portfolio use-case: regime-aware allocation
 
     How would a portfolio manager actually *use* these regime probabilities?
-    As a proof of concept, consider a simple rule applied to **US Equity**:
+    As a proof of concept, consider a simple rule applied to an
+    **equal-weight portfolio** of all three equity indices:
 
+    - **Static benchmark:** Hold 100% equity at all times (no regime info).
     - **Regime-aware strategy:** At each month $t$, use the *filtered*
       probability $P(s_{t-1} = \text{Bear} \mid \mathbf{y}_{1:t-1})$,
       which depends only on data available *before* time $t$, to set the
       equity weight.  If $P(\text{Bear}) > 0.5$, reduce the equity
       allocation to 30% (rest in cash at 0% return).  Otherwise, hold 100%
       equity.
-    - **Static benchmark:** Hold 100% equity at all times (no regime info).
+
+    The regime-aware strategy is a **risk-management** tool, not an
+    alpha generator.  Its value shows up in risk-adjusted metrics rather
+    than in higher cumulative return.  Specifically, we report the
+    annualised **Sharpe ratio**
+
+    $$
+    \text{SR} = \frac{\bar{r}}{\hat\sigma_r}\,\sqrt{12}
+    $$
+
+    where $\bar{r}$ and $\hat\sigma_r$ are the sample mean and standard
+    deviation of monthly portfolio returns, and the **Calmar ratio**
+
+    $$
+    \text{Calmar} = \frac{r_{\text{ann}}}{\lvert\text{MaxDD}\rvert}
+    $$
+
+    where $r_{\text{ann}}$ is the annualised return and MaxDD the maximum
+    peak-to-trough drawdown.  Reducing equity exposure during bear periods
+    lowers both the mean return and the volatility; because bear months
+    have higher volatility than bull months, the volatility reduction is
+    proportionally larger, and the Sharpe ratio typically improves.
 
     > **Important caveats:** (1) The posterior parameters were estimated
     > on the *full* sample, so this is an in-sample demonstration, not a
@@ -899,42 +922,50 @@ def _(mo):
 @app.cell
 def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
     _filtered = forward_filter_probs(aligned_idata, data["returns"], thin=10)
-
     _bear_filt = _filtered[:, bear_idx]
 
-    _returns_us = data["returns"][:, 0]
-    _T_pnl = len(_returns_us)
+    _r_ew = data["returns"].mean(axis=1)
+    _T_pnl = len(_r_ew)
 
-    _weights = np.ones(_T_pnl)
+    _w_aware = np.ones(_T_pnl)
     for _t in range(1, _T_pnl):
-        _weights[_t] = 0.3 if _bear_filt[_t - 1] > 0.5 else 1.0
+        _w_aware[_t] = 0.3 if _bear_filt[_t - 1] > 0.5 else 1.0
 
-    _pnl_aware = np.cumprod(1.0 + _weights * _returns_us)
-    _pnl_static = np.cumprod(1.0 + _returns_us)
+    _r_static = _r_ew
+    _r_aware = _w_aware * _r_ew
 
-    _total_aware = (_pnl_aware[-1] - 1) * 100
-    _total_static = (_pnl_static[-1] - 1) * 100
-    _vol_aware = np.std(_weights * _returns_us) * np.sqrt(12) * 100
-    _vol_static = np.std(_returns_us) * np.sqrt(12) * 100
-    _max_dd_static = np.min(_pnl_static / np.maximum.accumulate(_pnl_static) - 1) * 100
-    _max_dd_aware = np.min(_pnl_aware / np.maximum.accumulate(_pnl_aware) - 1) * 100
+    _cum_static = np.cumprod(1.0 + _r_static)
+    _cum_aware = np.cumprod(1.0 + _r_aware)
+
+    _tot_s = (_cum_static[-1] - 1) * 100
+    _tot_a = (_cum_aware[-1] - 1) * 100
+    _vol_s = np.std(_r_static) * np.sqrt(12) * 100
+    _vol_a = np.std(_r_aware) * np.sqrt(12) * 100
+    _dd_s = np.min(_cum_static / np.maximum.accumulate(_cum_static) - 1) * 100
+    _dd_a = np.min(_cum_aware / np.maximum.accumulate(_cum_aware) - 1) * 100
+    _ann_s = (np.prod(1.0 + _r_static) ** (12.0 / _T_pnl) - 1) * 100
+    _ann_a = (np.prod(1.0 + _r_aware) ** (12.0 / _T_pnl) - 1) * 100
+    _sh_s = np.mean(_r_static) / np.std(_r_static) * np.sqrt(12)
+    _sh_a = np.mean(_r_aware) / np.std(_r_aware) * np.sqrt(12)
+    _cal_s = _ann_s / abs(_dd_s) if abs(_dd_s) > 0 else np.inf
+    _cal_a = _ann_a / abs(_dd_a) if abs(_dd_a) > 0 else np.inf
 
     fig_pnl, _ax_pnl = plt.subplots(figsize=(14, 4))
-    _ax_pnl.plot(_pnl_static, label="Static 100% equity", linewidth=1.5, color="#666666")
-    _ax_pnl.plot(_pnl_aware, label="Regime-aware (30% in bear)", linewidth=1.5, color="#1976D2")
+    _ax_pnl.plot(_cum_static, label="Static 100% equity", linewidth=1.5, color="#666666")
+    _ax_pnl.plot(_cum_aware, label="Regime-aware (30% in bear)", linewidth=1.5, color="#1976D2")
 
     for _t in range(_T_pnl):
-        if _weights[_t] < 1.0:
+        if _w_aware[_t] < 1.0:
             _ax_pnl.axvspan(_t - 0.5, _t + 0.5, alpha=0.08, color="red")
 
     _ax_pnl.set_xlabel("Time (months)")
     _ax_pnl.set_ylabel("Cumulative value ($1 invested)")
-    _ax_pnl.set_title("Regime-Aware vs. Static Allocation (US Equity)")
+    _ax_pnl.set_title("Regime-Aware vs. Static Allocation (Equal-Weight Portfolio)")
     _ax_pnl.legend(loc="upper left")
     _ax_pnl.set_xlim(0, _T_pnl - 1)
     fig_pnl.tight_layout()
 
-    _n_reduced = int((_weights < 1.0).sum())
+    _n_reduced = int((_w_aware < 1.0).sum())
 
     mo.vstack([
         fig_pnl,
@@ -942,20 +973,26 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
             f"""
 | Metric | Static | Regime-aware |
 |--------|--------|--------------|
-| Cumulative return | {_total_static:+.1f}% | {_total_aware:+.1f}% |
-| Annualised volatility | {_vol_static:.1f}% | {_vol_aware:.1f}% |
-| Max drawdown | {_max_dd_static:+.1f}% | {_max_dd_aware:+.1f}% |
+| Cumulative return | {_tot_s:+.1f}% | {_tot_a:+.1f}% |
+| Annualised return | {_ann_s:+.1f}% | {_ann_a:+.1f}% |
+| Annualised volatility | {_vol_s:.1f}% | {_vol_a:.1f}% |
+| Max drawdown | {_dd_s:+.1f}% | {_dd_a:+.1f}% |
+| Sharpe ratio | {_sh_s:.2f} | {_sh_a:.2f} |
+| Calmar ratio | {_cal_s:.2f} | {_cal_a:.2f} |
 
-The bear regime was identified as posterior regime **{bear_idx}**
-(the regime with lower average $\\mu$).  The strategy reduced equity
-exposure in **{_n_reduced}** out of {_T_pnl} months (light-red shading).
-
-The regime-aware strategy sacrifices some cumulative return for materially
-lower volatility and a shallower maximum drawdown, i.e. the kind of
-risk-adjusted trade-off a portfolio manager would actually evaluate.
+The portfolio is an equal-weight average of all three equity indices.
+The regime-aware strategy reduced equity exposure in **{_n_reduced}** out
+of {_T_pnl} months (light-red shading).  The cumulative return may be lower
+because the strategy holds less equity on average, but the **Sharpe ratio**
+improves because bear months have higher volatility than bull months:
+reducing exposure during those periods lowers the denominator
+($\\hat\\sigma_r$) proportionally more than the numerator ($\\bar{{r}}$).
+The **Calmar ratio** improves for the same reason, i.e. the shallower
+max drawdown more than compensates for the lower annualised return.
 
 A rigorous out-of-sample evaluation with walk-forward re-estimation,
-proper transaction cost modelling, and multiple seeds is the subject of
+proper transaction cost modelling, and multiple seeds as well as a
+comprehensive analysis of the evaluation metrics is the subject of
 a future post in this series.
             """
         ),
