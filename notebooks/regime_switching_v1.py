@@ -340,11 +340,11 @@ def _(
 
     mo.md(
         f"""
-**Selected parameter values**
+    **Selected parameter values**
 
-| Parameter | Min | Max | Step | Selected |
-|-----------|-----|-----|------|----------|
-{_param_table}
+    | Parameter | Min | Max | Step | Selected |
+    |-----------|-----|-----|------|----------|
+    {_param_table}
         """
     )
     return
@@ -397,21 +397,21 @@ def _(asset_names, data, mo, np):
 
     mo.md(
         f"""
-### Generating parameters (annualised)
+    ### Generating parameters (annualised)
 
-| Parameter | Bull (regime 0) | Bear (regime 1) |
-|---|---|---|
-{_table}
+    | Parameter | Bull (regime 0) | Bear (regime 1) |
+    |---|---|---|
+    {_table}
 
-**T** = {_c['T']} months, **d** = {_c['d']} assets, **seed** = {_c['seed']}.
+    **T** = {_c['T']} months, **d** = {_c['d']} assets, **seed** = {_c['seed']}.
 
-The bull regime has moderate positive drift and low volatility, while the
-bear regime features negative drift across all equities and roughly doubled
-volatility, i.e. the classic growth/stress dichotomy.  Assets are
-conditionally uncorrelated given the regime
-($\\mathbf{{R}}_k = \\mathbf{{I}}$, i.e.
-$y_{{t,i}} \\perp y_{{t,j}} \\mid s_t$); a later notebook in this series
-introduces regime-dependent cross-asset correlations.
+    The bull regime has moderate positive drift and low volatility, while the
+    bear regime features negative drift across all equities and roughly doubled
+    volatility, i.e. the classic growth/stress dichotomy.  Assets are
+    conditionally uncorrelated given the regime
+    ($\\mathbf{{R}}_k = \\mathbf{{I}}$, i.e.
+    $y_{{t,i}} \\perp y_{{t,j}} \\mid s_t$); a later notebook in this series
+    introduces regime-dependent cross-asset correlations.
         """
     )
     return
@@ -489,29 +489,29 @@ def _(asset_names, data, mo, np):
 
     mo.md(
         f"""
-### Interpreting the regime-conditional distributions
+    ### Interpreting the regime-conditional distributions
 
-Each panel above shows the **regime-conditional marginal**
-$p(y_{{t,i}} \\mid s_t = k)$, i.e. the distribution of asset $i$'s
-monthly return given the market is in regime $k$.  These are the building
-blocks the model must learn: one distribution per asset per regime.
+    Each panel above shows the **regime-conditional marginal**
+    $p(y_{{t,i}} \\mid s_t = k)$, i.e. the distribution of asset $i$'s
+    monthly return given the market is in regime $k$.  These are the building
+    blocks the model must learn: one distribution per asset per regime.
 
-**Sample statistics from the generated data** ({_n_bull} bull months,
-{_n_bear} bear months):
+    **Sample statistics from the generated data** ({_n_bull} bull months,
+    {_n_bear} bear months):
 
-| Asset | Bull mean | Bull std | Bear mean | Bear std |
-|-------|-----------|----------|-----------|----------|
-{_interp_table}
+    | Asset | Bull mean | Bull std | Bear mean | Bear std |
+    |-------|-----------|----------|-----------|----------|
+    {_interp_table}
 
-The bull distributions are tightly clustered around small positive means,
-while the bear distributions are shifted left (negative mean) with roughly
-double the spread.  This is consistent with the generating parameters and
-confirms the data exhibit the regime structure we expect.
+    The bull distributions are tightly clustered around small positive means,
+    while the bear distributions are shifted left (negative mean) with roughly
+    double the spread.  This is consistent with the generating parameters and
+    confirms the data exhibit the regime structure we expect.
 
-The **overlap region** between the two KDEs, i.e. where the green and
-red densities intersect, is where regime classification is most uncertain.
-Returns in that overlap could plausibly come from either regime, and the
-model will assign intermediate posterior probabilities at those time steps.
+    The **overlap region** between the two KDEs, i.e. where the green and
+    red densities intersect, is where regime classification is most uncertain.
+    Returns in that overlap could plausibly come from either regime, and the
+    model will assign intermediate posterior probabilities at those time steps.
         """
     )
     return
@@ -606,22 +606,25 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
-    mo.mermaid(
-        """
-        graph TD
-            alpha["α (Dirichlet conc.)"] --> P["P (K×K transition matrix)"]
-            P --> hmm["hmm_loglik (Potential)"]
-            mu["μ ~ Normal(0, 0.05)  (K×d)"] --> hmm
-            eta["η (LKJ shape)"] --> chol0["chol_cov_0 ~ LKJCholeskyCov"]
-            eta --> chol1["chol_cov_1 ~ LKJCholeskyCov"]
-            sd_prior["σ ~ HalfNormal(0.10)"] --> chol0
-            sd_prior --> chol1
-            chol0 --> hmm
-            chol1 --> hmm
-            y["y₁:T (observed returns)"] --> hmm
-        """
-    )
+def _(model):
+    import pymc as pm
+
+    pm.model_to_graphviz(model)
+
+    # Custom mermaid alternative (kept for reference):
+    #
+    # mo.mermaid(
+    #     """
+    #     graph TD
+    #         alpha["α (Dirichlet conc.)"] --> P["P (K×K transition matrix)"]
+    #         P --> hmm["hmm_loglik (Potential)"]
+    #         mu["μ ~ Normal(0, 0.05)  (K×d)"] --> hmm
+    #         eta["η (LKJ shape)"] --> chol0["chol_cov_0 ~ LKJCholeskyCov"] & chol1["chol_cov_1 ~ LKJCholeskyCov"]
+    #         sd_prior["σ ~ HalfNormal(0.10)"] --> chol0 & chol1
+    #         chol0 & chol1 --> hmm
+    #         y["y₁:T (observed returns)"] --> hmm
+    #     """
+    # )
     return
 
 
@@ -713,21 +716,21 @@ def _(check_diagnostics_label_aware, idata, mo):
     )
     mo.md(
         f"""
-### Convergence diagnostics
+    ### Convergence diagnostics
 
-| Check | Value | Status |
-|-------|-------|--------|
-| Divergences | {diag['n_divergences']} | {_status(diag['no_divergences'])} |
-| max R-hat | {diag['max_rhat']:.3f} | {_status(diag['rhat_ok'])} |
-| min ESS (bulk){_ess_note} | {diag['min_ess_bulk']:.0f} | {_status(diag['ess_ok'])} |
-| Label switching | {_ls_msg} | |
+    | Check | Value | Status |
+    |-------|-------|--------|
+    | Divergences | {diag['n_divergences']} | {_status(diag['no_divergences'])} |
+    | max R-hat | {diag['max_rhat']:.3f} | {_status(diag['rhat_ok'])} |
+    | min ESS (bulk){_ess_note} | {diag['min_ess_bulk']:.0f} | {_status(diag['ess_ok'])} |
+    | Label switching | {_ls_msg} | |
 
-- **Divergences** = 0 confirms the sampler navigated the posterior geometry
-  without numerical issues.
-- **R-hat** < 1.01 after label alignment confirms all chains converged to
-  the same stationary distribution.
-- **ESS (bulk)** > 400 ensures enough effective independent draws for
-  reliable 94% credible intervals (BDA3, Ch. 11).
+    - **Divergences** = 0 confirms the sampler navigated the posterior geometry
+      without numerical issues.
+    - **R-hat** < 1.01 after label alignment confirms all chains converged to
+      the same stationary distribution.
+    - **ESS (bulk)** > 400 ensures enough effective independent draws for
+      reliable 94% credible intervals (BDA3, Ch. 11).
         """
     )
     return (diag,)
@@ -844,31 +847,31 @@ def _(bear_idx, data, mo, np, perm, regime_samples):
 
     mo.md(
         f"""
-### Regime recovery results
+    ### Regime recovery results
 
-The stacked bands show $P(s_t = k \\mid \\mathbf{{y}}_{{1:T}})$ at every
-time step, aggregated over all posterior draws.  The dashed black line
-is the true generating regime.
+    The stacked bands show $P(s_t = k \\mid \\mathbf{{y}}_{{1:T}})$ at every
+    time step, aggregated over all posterior draws.  The dashed black line
+    is the true generating regime.
 
-**Key observations:**
+    **Key observations:**
 
-- **Modal regime accuracy:** **{accuracy:.1%}** (best of direct / label-flipped).
-  The model correctly identifies the regime at almost every time step.
-- **Transition detection:** The data contain **{_n_transitions}** true regime
-  transitions.  Posterior uncertainty concentrates at these transition
-  points, which is exactly where the model *should* be least certain.
-- **Uncertain periods:** {_n_uncertain} out of {_T} months have
-  $P(\\text{{Bear}}) \\in (0.2, 0.8)$, reflecting genuine ambiguity at
-  regime boundaries.
+    - **Modal regime accuracy:** **{accuracy:.1%}** (best of direct / label-flipped).
+      The model correctly identifies the regime at almost every time step.
+    - **Transition detection:** The data contain **{_n_transitions}** true regime
+      transitions.  Posterior uncertainty concentrates at these transition
+      points, which is exactly where the model *should* be least certain.
+    - **Uncertain periods:** {_n_uncertain} out of {_T} months have
+      $P(\\text{{Bear}}) \\in (0.2, 0.8)$, reflecting genuine ambiguity at
+      regime boundaries.
 
-This accuracy metric is only possible because we use synthetic data with
-known ground-truth regimes.  With real market data, the posterior
-probability bands are the primary output: they express the model's
-belief about the current regime *and* its uncertainty, without requiring
-knowledge of the true state.
+    This accuracy metric is only possible because we use synthetic data with
+    known ground-truth regimes.  With real market data, the posterior
+    probability bands are the primary output: they express the model's
+    belief about the current regime *and* its uncertainty, without requiring
+    knowledge of the true state.
         """
     )
-    return (accuracy,)
+    return
 
 
 @app.cell
@@ -971,29 +974,29 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
         fig_pnl,
         mo.md(
             f"""
-| Metric | Static | Regime-aware |
-|--------|--------|--------------|
-| Cumulative return | {_tot_s:+.1f}% | {_tot_a:+.1f}% |
-| Annualised return | {_ann_s:+.1f}% | {_ann_a:+.1f}% |
-| Annualised volatility | {_vol_s:.1f}% | {_vol_a:.1f}% |
-| Max drawdown | {_dd_s:+.1f}% | {_dd_a:+.1f}% |
-| Sharpe ratio | {_sh_s:.2f} | {_sh_a:.2f} |
-| Calmar ratio | {_cal_s:.2f} | {_cal_a:.2f} |
+    | Metric | Static | Regime-aware |
+    |--------|--------|--------------|
+    | Cumulative return | {_tot_s:+.1f}% | {_tot_a:+.1f}% |
+    | Annualised return | {_ann_s:+.1f}% | {_ann_a:+.1f}% |
+    | Annualised volatility | {_vol_s:.1f}% | {_vol_a:.1f}% |
+    | Max drawdown | {_dd_s:+.1f}% | {_dd_a:+.1f}% |
+    | Sharpe ratio | {_sh_s:.2f} | {_sh_a:.2f} |
+    | Calmar ratio | {_cal_s:.2f} | {_cal_a:.2f} |
 
-The portfolio is an equal-weight average of all three equity indices.
-The regime-aware strategy reduced equity exposure in **{_n_reduced}** out
-of {_T_pnl} months (light-red shading).  The cumulative return may be lower
-because the strategy holds less equity on average, but the **Sharpe ratio**
-improves because bear months have higher volatility than bull months:
-reducing exposure during those periods lowers the denominator
-($\\hat\\sigma_r$) proportionally more than the numerator ($\\bar{{r}}$).
-The **Calmar ratio** improves for the same reason, i.e. the shallower
-max drawdown more than compensates for the lower annualised return.
+    The portfolio is an equal-weight average of all three equity indices.
+    The regime-aware strategy reduced equity exposure in **{_n_reduced}** out
+    of {_T_pnl} months (light-red shading).  The cumulative return may be lower
+    because the strategy holds less equity on average, but the **Sharpe ratio**
+    improves because bear months have higher volatility than bull months:
+    reducing exposure during those periods lowers the denominator
+    ($\\hat\\sigma_r$) proportionally more than the numerator ($\\bar{{r}}$).
+    The **Calmar ratio** improves for the same reason, i.e. the shallower
+    max drawdown more than compensates for the lower annualised return.
 
-A rigorous out-of-sample evaluation with walk-forward re-estimation,
-proper transaction cost modelling, and multiple seeds as well as a
-comprehensive analysis of the evaluation metrics is the subject of
-a future post in this series.
+    A rigorous out-of-sample evaluation with walk-forward re-estimation,
+    proper transaction cost modelling, and multiple seeds as well as a
+    comprehensive analysis of the evaluation metrics is the subject of
+    a future post in this series.
             """
         ),
     ])
@@ -1122,37 +1125,37 @@ def _(
 
     mo.md(
         f"""
-### Interpreting the results
+    ### Interpreting the results
 
-The posterior regime indices do not necessarily match the data-generation
-indices.  We identify regimes by their posterior mean: the regime with
-higher (lower) average $\\mu$ across assets is labelled Bull (Bear).
-In this run, posterior regime **{bull_idx}** = Bull, posterior regime
-**{bear_idx}** = Bear.
+    The posterior regime indices do not necessarily match the data-generation
+    indices.  We identify regimes by their posterior mean: the regime with
+    higher (lower) average $\\mu$ across assets is labelled Bull (Bear).
+    In this run, posterior regime **{bull_idx}** = Bull, posterior regime
+    **{bear_idx}** = Bear.
 
-**Regime means** (annualised):
+    **Regime means** (annualised):
 
-| Parameter | Posterior mean | 94% HDI | True value | Covered? |
-|-----------|---------------|---------|------------|----------|
-{_mu_table}
+    | Parameter | Posterior mean | 94% HDI | True value | Covered? |
+    |-----------|---------------|---------|------------|----------|
+    {_mu_table}
 
-All true regime means fall within their 94% HDI, confirming that the model
-successfully recovers the generating parameters.  The HDI widths reflect genuine
-uncertainty: with {data['config']['T']} months of data, the bull-regime
-means are estimated more precisely (more bull months in the sample) than
-the bear-regime means.
+    All true regime means fall within their 94% HDI, confirming that the model
+    successfully recovers the generating parameters.  The HDI widths reflect genuine
+    uncertainty: with {data['config']['T']} months of data, the bull-regime
+    means are estimated more precisely (more bull months in the sample) than
+    the bear-regime means.
 
-**Transition matrix** (self-transition probabilities):
+    **Transition matrix** (self-transition probabilities):
 
-| Parameter | Posterior mean | 94% HDI | True value | Covered? | Implied duration |
-|-----------|---------------|---------|------------|----------|-----------------|
-{_P_table}
+    | Parameter | Posterior mean | 94% HDI | True value | Covered? | Implied duration |
+    |-----------|---------------|---------|------------|----------|-----------------|
+    {_P_table}
 
-The posterior means for the self-transition probabilities are close to the
-true values, and the implied regime durations match well.  A Bayesian
-portfolio optimiser would integrate over these posterior distributions when
-computing optimal weights, producing allocations that are robust to
-parameter estimation error.
+    The posterior means for the self-transition probabilities are close to the
+    true values, and the implied regime durations match well.  A Bayesian
+    portfolio optimiser would integrate over these posterior distributions when
+    computing optimal weights, producing allocations that are robust to
+    parameter estimation error.
         """
     )
     return
@@ -1214,7 +1217,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ---
