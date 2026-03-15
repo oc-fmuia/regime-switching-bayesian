@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy import stats
 
 from regime_switching_bayesian.data_gen import generate_hmm_data
@@ -65,3 +66,8 @@ def test_hard_switch_regimes():
 def test_hard_switch_returns_shape():
     data = generate_hmm_data(T=120, K=2, d=3, seed=42, hard_switch_at=60)
     assert data["returns"].shape == (120, 3)
+
+
+def test_k_gt2_no_explicit_params_raises():
+    with pytest.raises(ValueError, match="K=2"):
+        generate_hmm_data(T=30, K=3, d=3)

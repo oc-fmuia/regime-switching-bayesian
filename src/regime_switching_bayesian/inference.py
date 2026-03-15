@@ -3,6 +3,7 @@
 import arviz as az
 import numpy as np
 import pymc as pm
+import xarray as xr
 from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 
@@ -61,11 +62,11 @@ def check_diagnostics(idata: az.InferenceData) -> dict[str, bool | int | float]:
 
 
 def _permute_chain(
-    posterior: "xr.Dataset",
+    posterior: xr.Dataset,
     chain_idx: int,
     perm: tuple[int, ...],
     K: int,
-) -> "xr.Dataset":
+) -> xr.Dataset:
     """Return a copy of *posterior* with regime labels in *chain_idx* permuted.
 
     Handles:
@@ -187,6 +188,7 @@ def check_diagnostics_label_aware(
         aligned_rhat = az.rhat(aligned_idata)
         best_max_rhat = float(np.nanmax(aligned_rhat.to_array().values))
     else:
+        aligned_idata = None
         best_max_rhat = naive_max_rhat
 
     label_switching = (
@@ -195,10 +197,8 @@ def check_diagnostics_label_aware(
         and any_switched
     )
 
-    if any_switched and n_chains >= 2:
-        ess = az.ess(aligned_idata)
-    else:
-        ess = az.ess(idata)
+    ess_source = aligned_idata if aligned_idata is not None else idata
+    ess = az.ess(ess_source)
     min_ess_bulk = float(np.nanmin(ess.to_array().values))
 
     rhat_ok = best_max_rhat < 1.01 if np.isfinite(best_max_rhat) else True
