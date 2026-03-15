@@ -28,6 +28,7 @@ dependencies = [
     "pymc-extras>=0.9.0",
     "jax>=0.5.0",
     "numpyro>=0.18.0",
+    "marimo>=0.10.0",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,8 @@ platforms = ["osx-arm64", "linux-64"]
 
 [tool.pixi.dependencies]
 python = "3.12.*"
+graphviz = ">=14.1.2,<15"
+python-graphviz = ">=0.21,<0.22"
 
 [tool.pixi.pypi-dependencies]
 regime-switching-bayesian = { path = ".", editable = true }

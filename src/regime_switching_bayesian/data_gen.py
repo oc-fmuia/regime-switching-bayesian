@@ -15,6 +15,7 @@ def generate_hmm_data(
     P: np.ndarray | None = None,
     pi0: np.ndarray | None = None,
     seed: int = 42,
+    hard_switch_at: int | None = None,
 ) -> dict[str, Any]:
     """
     Generate synthetic HMM regime-switching multivariate return data.
@@ -30,6 +31,10 @@ def generate_hmm_data(
     P : (K, K) transition matrix.
     pi0 : (K,) initial regime distribution.
     seed : random seed for reproducibility.
+    hard_switch_at : int or None
+        If set, overrides the Markov simulation: regimes[0:hard_switch_at]=0
+        and regimes[hard_switch_at:]=1. Returns are still drawn from the
+        regime-conditional MVN.
 
     Returns
     -------
@@ -82,9 +87,12 @@ def generate_hmm_data(
         covs[k] = D @ L @ L.T @ D
 
     regimes = np.zeros(T, dtype=int)
-    regimes[0] = rng.choice(K, p=pi0)
-    for t in range(1, T):
-        regimes[t] = rng.choice(K, p=P[regimes[t - 1]])
+    if hard_switch_at is not None:
+        regimes[hard_switch_at:] = 1
+    else:
+        regimes[0] = rng.choice(K, p=pi0)
+        for t in range(1, T):
+            regimes[t] = rng.choice(K, p=P[regimes[t - 1]])
 
     returns = np.zeros((T, d))
     for t in range(T):
@@ -101,5 +109,5 @@ def generate_hmm_data(
             "P": P,
             "pi0": pi0,
         },
-        "config": {"T": T, "K": K, "d": d, "seed": seed},
+        "config": {"T": T, "K": K, "d": d, "seed": seed, "hard_switch_at": hard_switch_at},
     }

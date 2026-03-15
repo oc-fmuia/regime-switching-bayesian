@@ -93,20 +93,30 @@ def build_model(
             log_lik_components.append(log_lik_k)
         log_lik = pt.stack(log_lik_components, axis=1)  # (T, K)
 
+        # FM-NOTE: Normalized forward algorithm — subtract logsumexp at each
+        # step to keep log_alpha near zero.  Without this, log_alpha drifts to
+        # large negative values as T grows, producing ill-conditioned gradients
+        # through pytensor.scan and causing massive divergences for T >= ~200.
         log_alpha_init = log_pi0 + log_lik[0]
+        log_c_init = pt.logsumexp(log_alpha_init)
+        log_alpha_init_norm = log_alpha_init - log_c_init
 
         def forward_step(log_lik_t, log_alpha_prev, log_P_):
-            return pt.logsumexp(log_alpha_prev[:, None] + log_P_, axis=0) + log_lik_t
+            log_alpha_raw = (
+                pt.logsumexp(log_alpha_prev[:, None] + log_P_, axis=0)
+                + log_lik_t
+            )
+            log_c_t = pt.logsumexp(log_alpha_raw)
+            return log_alpha_raw - log_c_t, log_c_t
 
-        log_alphas = pytensor.scan(
+        (log_alphas_norm, log_cs), _ = pytensor.scan(
             fn=forward_step,
             sequences=[log_lik[1:]],
-            outputs_info=[log_alpha_init],
+            outputs_info=[log_alpha_init_norm, None],
             non_sequences=[log_P],
-            return_updates=False,
         )
 
-        # log_alphas has shape (T-1, K); [-1] selects log α_T, the final forward variable
-        pm.Potential("hmm_loglik", pt.logsumexp(log_alphas[-1], axis=0))
+        total_ll = log_c_init + pt.sum(log_cs) + pt.logsumexp(log_alphas_norm[-1])
+        pm.Potential("hmm_loglik", total_ll)
 
     return model

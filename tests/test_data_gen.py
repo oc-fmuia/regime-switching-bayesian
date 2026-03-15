@@ -1,5 +1,3 @@
-"""Tests for synthetic data generation (Step 1)."""
-
 import numpy as np
 import pytest
 from scipy import stats
@@ -48,7 +46,7 @@ def test_regime_means_differ():
 
 def test_config_stored():
     data = generate_hmm_data(T=60, K=2, d=4, seed=99)
-    assert data["config"] == {"T": 60, "K": 2, "d": 4, "seed": 99}
+    assert data["config"] == {"T": 60, "K": 2, "d": 4, "seed": 99, "hard_switch_at": None}
 
 
 def test_covariance_positive_definite():
@@ -56,6 +54,18 @@ def test_covariance_positive_definite():
     for k in range(2):
         eigvals = np.linalg.eigvalsh(data["params"]["covs"][k])
         assert np.all(eigvals > 0), f"Covariance for regime {k} is not positive definite"
+
+
+def test_hard_switch_regimes():
+    data = generate_hmm_data(T=120, K=2, d=3, seed=42, hard_switch_at=60)
+    regimes = data["regimes"]
+    assert np.all(regimes[:60] == 0), "First half should be regime 0"
+    assert np.all(regimes[60:] == 1), "Second half should be regime 1"
+
+
+def test_hard_switch_returns_shape():
+    data = generate_hmm_data(T=120, K=2, d=3, seed=42, hard_switch_at=60)
+    assert data["returns"].shape == (120, 3)
 
 
 def test_k_gt2_no_explicit_params_raises():

@@ -46,6 +46,14 @@ where `g(l)` maps asset l to its geography and `h(l)` to its sector within that 
 
 ## Covariance Structure
 
+### Multi-Asset Extension (d=5)
+
+Extend the current three-asset universe (US equities, long-duration Treasuries, gold) to five assets by adding international developed-market equities (e.g., MSCI EAFE) and investment-grade credit (e.g., US IG corporate bond index). The LKJ Cholesky prior on a (5×5) correlation matrix remains well-identified: the number of free off-diagonal parameters grows as d(d-1)/2 = 10, which is manageable with T=120 monthly observations given sufficient regime-conditional data. Empirically the LKJ prior starts to become poorly identified when d approaches ~8 and the number of off-diagonal parameters (~28) begins to compete with the effective per-regime sample size.
+
+**Implementation:** no changes to `build_model` or the forward algorithm are required; only `scenario_a_params` / `scenario_b_params` in `src/data_gen.py` and the real-data loader (see below) need to supply (5×5) Cholesky factors. The LKJ concentration parameter `eta` may need to be increased slightly (e.g., from 2 to 4) for d=5 to keep the prior from placing too much mass on near-singular correlation matrices.
+
+**Beyond d~8:** transition to the Factor Model for Covariance (see below).
+
 ### Factor Model for Covariance
 
 The full spec defines:
@@ -129,6 +137,37 @@ Five intervention types from the finance spec:
 - Regime-aware rebalancing strategy backtest
 - Maximum drawdown posterior distribution
 - Regime-conditional Sharpe ratio with uncertainty
+
+---
+
+## Real Data Application (issue #24)
+
+### `src/data_loader.py` — yfinance-backed monthly return loader
+
+Add a `src/data_loader.py` module that downloads and preprocesses real asset return data so that the blogpost notebook can be rerun on historical data without modifying any model or inference code.
+
+**Data universe:** S&P 500 total return index (or SPY), iShares 20+ Year Treasury Bond ETF (TLT) as a proxy for long-duration Treasuries, and SPDR Gold Shares (GLD) — monthly log-returns from January 2000 through December 2025, giving T≈312 observations and d=3, the same shape contract as `generate_hmm_data`.
+
+**Public API:**
+
+```python
+def load_monthly_returns(
+    tickers: list[str],
+    start: str,
+    end: str,
+    price_col: str = "Adj Close",
+) -> tuple[np.ndarray, list[str], pd.DatetimeIndex]:
+    ...
+```
+
+- Downloads adjusted close prices via `yfinance.download`
+- Resamples to month-end, computes log-returns `log(P_t / P_{t-1})`, drops the first NaN row
+- Returns `(returns: float[T, d], asset_names: list[str], dates: DatetimeIndex)`
+- The returned `returns` array is a drop-in replacement for the first output of `generate_hmm_data`
+
+**Caching:** saves the downloaded array to `results/real_data_<hash>.npz` keyed by (tickers, start, end) so repeated notebook runs do not re-hit the network.
+
+**Issue reference:** #24.
 
 ---
 
