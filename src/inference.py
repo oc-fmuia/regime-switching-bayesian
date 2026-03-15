@@ -174,6 +174,7 @@ def check_diagnostics_label_aware(
 
     any_switched = any(p != identity for p in best_assignment)
 
+    result_idata = idata
     if any_switched and n_chains >= 2:
         ds = posterior.copy(deep=True)
         for c, perm in enumerate(best_assignment):
@@ -182,6 +183,7 @@ def check_diagnostics_label_aware(
 
         aligned_idata = idata.copy()
         aligned_idata.posterior = ds
+        result_idata = aligned_idata
         aligned_rhat = az.rhat(aligned_idata)
         best_max_rhat = float(np.nanmax(aligned_rhat.to_array().values))
     else:
@@ -193,7 +195,10 @@ def check_diagnostics_label_aware(
         and any_switched
     )
 
-    ess = az.ess(idata)
+    if any_switched and n_chains >= 2:
+        ess = az.ess(aligned_idata)
+    else:
+        ess = az.ess(idata)
     min_ess_bulk = float(np.nanmin(ess.to_array().values))
 
     rhat_ok = best_max_rhat < 1.01 if np.isfinite(best_max_rhat) else True
@@ -208,6 +213,8 @@ def check_diagnostics_label_aware(
         "min_ess_bulk": min_ess_bulk,
         "label_switching_detected": label_switching,
         "best_permutations": best_assignment,
+        "ess_on_aligned": any_switched and n_chains >= 2,
+        "aligned_idata": result_idata,
     }
 
 
@@ -395,6 +402,65 @@ def align_regime_samples(regime_samples: np.ndarray, K: int = 2) -> np.ndarray:
             aligned[c] = remapped
 
     return aligned
+
+
+def forward_filter_probs(
+    idata: az.InferenceData,
+    data: np.ndarray,
+    thin: int = 10,
+) -> np.ndarray:
+    """
+    Compute filtered regime probabilities P(s_t | y_{1:t}) across posterior draws.
+
+    Parameters
+    ----------
+    idata: az.InferenceData
+        Posterior samples.
+    data: np.ndarray[T, d]
+        Observed returns.
+    thin: int
+        Keep every `thin`-th draw.
+
+    Returns
+    -------
+    np.ndarray[T, K]
+        Averaged filtered probabilities (forward-only, no smoothing).
+    """
+    T, d = data.shape
+    posterior = idata.posterior
+    n_chains = posterior.sizes["chain"]
+    n_draws = posterior.sizes["draw"]
+    K = posterior["mu"].shape[2]
+
+    P_all = posterior["P"].values
+    mu_all = posterior["mu"].values
+    chol_all = _batch_extract_chol_covs(idata, K, d)
+
+    draw_indices = np.arange(0, n_draws, thin)
+    accum = np.zeros((T, K))
+    count = 0
+
+    for c in range(n_chains):
+        for s in draw_indices:
+            log_lik = _compute_emission_loglik(data, mu_all[c, s], chol_all[c, s])
+            log_P = np.log(P_all[c, s] + 1e-300)
+            pi0 = stationary_distribution(P_all[c, s])
+
+            log_alpha = np.empty((T, K))
+            log_alpha[0] = np.log(pi0 + 1e-300) + log_lik[0]
+
+            for t in range(1, T):
+                for k in range(K):
+                    log_alpha[t, k] = (
+                        logsumexp(log_alpha[t - 1] + log_P[:, k]) + log_lik[t, k]
+                    )
+
+            for t in range(T):
+                probs_t = np.exp(log_alpha[t] - logsumexp(log_alpha[t]))
+                accum[t] += probs_t
+            count += 1
+
+    return accum / count
 
 
 def run_ffbs(

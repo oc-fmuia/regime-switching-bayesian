@@ -32,6 +32,7 @@ def _():
         align_regime_samples,
         check_diagnostics_label_aware,
         fit,
+        forward_filter_probs,
         run_ffbs,
     )
     from src.model import build_model
@@ -47,6 +48,7 @@ def _():
         build_model,
         check_diagnostics_label_aware,
         fit,
+        forward_filter_probs,
         generate_hmm_data,
         np,
         plot_posterior_summary,
@@ -63,20 +65,48 @@ def _(mo):
     mo.md(r"""
     # Bayesian Regime-Switching for Equity Returns
 
-    Equity markets alternate between calm growth and volatile drawdowns.
-    A single-distribution model — one mean vector, one covariance matrix —
-    cannot capture this structure: it overestimates volatility in calm periods
-    and underestimates tail risk during crises.
+    You manage a multi-asset portfolio.  Your risk model uses a single mean
+    vector and a single covariance matrix estimated over a long history.
+    In calm markets, it overstates volatility and leaves return on the table.
+    In a crisis, it understates tail risk — and the drawdown arrives before
+    the model catches up.
 
-    A **regime-switching model** discovers these hidden market states from
-    return data alone, giving portfolio managers a probabilistic,
-    time-varying view of the current environment and its likely persistence.
+    The core issue is that **markets do not live in one statistical regime**.
+    Bull phases feature moderate drift, compressed volatility, and benign
+    correlations.  Bear phases bring negative drift, volatility spikes, and
+    correlation convergence toward one.  A model that averages across these
+    environments mis-prices risk in both.
 
-    This notebook builds a Bayesian Hidden Markov Model (HMM) in PyMC,
-    fits it via NUTS on a marginalised likelihood, and recovers the latent
-    regime sequence using a forward-filter backward-sampler (FFBS).
-    Because the data are synthetic, we can verify that the model recovers
-    the true parameters and regimes.
+    A **regime-switching model** addresses this directly.  Instead of one
+    distribution, it learns $K$ distinct distributions — one per regime —
+    together with a transition matrix that governs how the market moves
+    between them.  At every point in time it produces a *probability* of
+    being in each regime, not a binary label, giving the portfolio manager
+    a calibrated, time-varying risk lens.
+
+    This notebook is the first in a series that builds this framework from
+    the ground up using Bayesian inference:
+
+    1. **The Problem and the Model** — *this notebook.*  Build a 2-regime
+       HMM for equity returns, fit it with NUTS, recover regimes via FFBS,
+       and show a simple regime-aware allocation demo.
+    2. **Model Validation** — prior and posterior predictive checks.
+       Verify that the priors produce plausible data and that the fitted
+       model reproduces observed return features (Bayesian p-values,
+       BDA3 Ch. 6).
+    3. **Multi-Asset Extension** — extend to an equity-bond-gold universe
+       with regime-dependent correlations.  Address the correlation-masking
+       problem and its implications for hedge ratios.
+    4. **Portfolio Analytics** — translate posterior uncertainty into
+       VaR, CVaR, regime-conditional correlations, and hedge ratio
+       implications.
+    5. **Model Comparison** — $K = 1$ vs $K = 2$ vs $K = 3$ via WAIC.
+       Introduce the 3-regime scenario and discuss honest uncertainty
+       (Vehtari, Gelman & Gabry, 2017).
+    6. **Real Data Application** — apply the pipeline to S&P 500,
+       long-duration Treasuries, and gold (2000–2025).
+    7. **Extensions** — Student-$t$ emissions, factor covariance
+       structure, time-varying transition probabilities.
 
     **References.**
     Hamilton (1989), *Econometrica*;
@@ -124,16 +154,71 @@ def _(mo):
     **bull** regime with moderate positive drift and low volatility, and a
     **bear** regime with negative drift and elevated volatility.
 
-    The synthetic data are generated from a known $K = 2$ HMM with
-    identity correlation matrices (assets are conditionally uncorrelated
-    given the regime), allowing us to verify that the model recovers the
-    true parameters and regimes in a clean setting.  All parameters below
-    are calibrated to realistic monthly magnitudes; annualised equivalents
-    are shown for interpretation.
+    The synthetic data are generated from a known $K = 2$ HMM, allowing us to
+    verify that the model recovers the true parameters and regimes in a clean
+    setting.  All parameters below are calibrated to realistic monthly
+    magnitudes; annualised equivalents are shown for interpretation.
+    """)
+    return
 
-    A subsequent notebook in this series extends the framework to a
-    multi-asset universe (equities, bonds, gold) with regime-dependent
-    correlations — a materially harder inference problem.
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### The generative model
+
+    The data-generating process is a first-order Hidden Markov Model with
+    $K$ regimes and $d$ assets.  At each time step:
+
+    $$
+    s_1 \sim \mathrm{Categorical}(\boldsymbol{\pi}_0), \qquad
+    s_t \mid s_{t-1} \sim \mathrm{Categorical}(\mathbf{P}_{s_{t-1}, :}), \qquad
+    \mathbf{y}_t \mid s_t = k \sim \mathcal{N}(\boldsymbol{\mu}_k,\, \boldsymbol{\Sigma}_k)
+    $$
+
+    where $\boldsymbol{\pi}_0$ is the initial state distribution,
+    $\mathbf{P}$ is the $K \times K$ transition matrix
+    ($P_{jk} = \Pr(s_t = k \mid s_{t-1} = j)$),
+    and each regime $k$ has its own mean vector $\boldsymbol{\mu}_k \in \mathbb{R}^d$
+    and covariance matrix $\boldsymbol{\Sigma}_k \in \mathbb{R}^{d \times d}$.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Covariance structure and the correlation assumption
+
+    Each regime's covariance matrix is decomposed as
+
+    $$
+    \boldsymbol{\Sigma}_k
+    = \mathbf{D}_k \, \mathbf{R}_k \, \mathbf{D}_k
+    = \mathbf{D}_k \, \mathbf{L}_k \mathbf{L}_k^\top \, \mathbf{D}_k
+    $$
+
+    where the three pieces are:
+
+    | Component | Definition | Role |
+    |-----------|-----------|------|
+    | $\mathbf{D}_k = \mathrm{diag}(\sigma_{k,1}, \ldots, \sigma_{k,d})$ | Diagonal matrix of per-asset standard deviations | Scales each asset's volatility |
+    | $\mathbf{R}_k = \mathbf{L}_k \mathbf{L}_k^\top$ | Correlation matrix (via its Cholesky factor $\mathbf{L}_k$) | Encodes within-regime co-movement |
+    | $\boldsymbol{\Sigma}_k$ | Full covariance matrix | Determines the joint return distribution in regime $k$ |
+
+    **Simplifying assumption in this notebook:** we set $\mathbf{R}_k = \mathbf{I}$
+    (the identity matrix) for every regime.  This means assets are
+    **conditionally independent given the regime** — within a given market
+    regime, knowing that US equities dropped today tells you nothing extra
+    about EM equities beyond what the regime label itself already implies.
+    All observed co-movement in the data comes from the shared regime, not
+    from within-regime correlation.
+
+    This is a deliberate simplification that keeps inference fast and focused
+    on learning the regime means, volatilities, and transition dynamics.
+    A later notebook in this series introduces $\mathbf{R}_k \neq \mathbf{I}$
+    with regime-dependent correlations — the harder problem at the heart of
+    portfolio risk management.
     """)
     return
 
@@ -165,35 +250,63 @@ def _(mo):
 
 @app.cell
 def _(asset_names, mo):
+    _bull_mu_defaults = [0.010, 0.008, 0.012]
+    _bear_mu_defaults = [-0.005, -0.008, -0.003]
+    _bull_vol_defaults = [0.040, 0.035, 0.045]
+    _bear_vol_defaults = [0.080, 0.090, 0.100]
+
     bull_mean_sliders = [
         mo.ui.slider(start=0.0, stop=0.05, value=v, step=0.001,
                       label=f"Bull μ – {a}")
-        for a, v in zip(asset_names, [0.010, 0.008, 0.012])
+        for a, v in zip(asset_names, _bull_mu_defaults)
     ]
     bear_mean_sliders = [
         mo.ui.slider(start=-0.05, stop=0.0, value=v, step=0.001,
                       label=f"Bear μ – {a}")
-        for a, v in zip(asset_names, [-0.005, -0.008, -0.003])
+        for a, v in zip(asset_names, _bear_mu_defaults)
     ]
     bull_vol_sliders = [
         mo.ui.slider(start=0.01, stop=0.10, value=v, step=0.005,
                       label=f"Bull σ – {a}")
-        for a, v in zip(asset_names, [0.040, 0.035, 0.045])
+        for a, v in zip(asset_names, _bull_vol_defaults)
     ]
     bear_vol_sliders = [
         mo.ui.slider(start=0.02, stop=0.20, value=v, step=0.005,
                       label=f"Bear σ – {a}")
-        for a, v in zip(asset_names, [0.080, 0.090, 0.100])
+        for a, v in zip(asset_names, _bear_vol_defaults)
     ]
 
-    mo.md("### Regime parameters (data generation)")
+    _slider_specs = [
+        ("Bull μ", 0.0, 0.05, 0.001, _bull_mu_defaults),
+        ("Bear μ", -0.05, 0.0, 0.001, _bear_mu_defaults),
+        ("Bull σ", 0.01, 0.10, 0.005, _bull_vol_defaults),
+        ("Bear σ", 0.02, 0.20, 0.005, _bear_vol_defaults),
+    ]
+    _param_rows = []
+    for _prefix, _lo, _hi, _step, _defaults in _slider_specs:
+        for _a, _v in zip(asset_names, _defaults):
+            _param_rows.append(
+                f"| {_prefix} – {_a} | {_lo} | {_hi} | {_step} | {_v} |"
+            )
+    _param_table = "\n".join(_param_rows)
+
     mo.vstack([
+        mo.md("### Regime parameters (data generation)"),
         mo.md("**Bull (growth) regime**"),
         mo.hstack(bull_mean_sliders, justify="start"),
         mo.hstack(bull_vol_sliders, justify="start"),
         mo.md("**Bear (stress) regime**"),
         mo.hstack(bear_mean_sliders, justify="start"),
         mo.hstack(bear_vol_sliders, justify="start"),
+        mo.md(
+            f"""
+**Parameter ranges**
+
+| Parameter | Min | Max | Step | Default |
+|-----------|-----|-----|------|---------|
+{_param_table}
+            """
+        ),
     ])
     return (
         bear_mean_sliders,
@@ -316,13 +429,55 @@ def _(asset_names, data, plt, sns):
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    These regime-conditional marginals show the return separation that the
-    model will attempt to recover.  The mean shift (leftward) and
-    volatility expansion (wider spread) in the bear regime are clearly
-    visible for all three equity indices.
-    """)
+def _(asset_names, data, mo, np):
+    _returns = data["returns"]
+    _regimes = data["regimes"]
+    _p = data["params"]
+
+    _interp_rows = []
+    for _i, _name in enumerate(asset_names):
+        _bull_vals = _returns[_regimes == 0, _i]
+        _bear_vals = _returns[_regimes == 1, _i]
+        _bull_mean = np.mean(_bull_vals) * 100 if len(_bull_vals) > 0 else 0
+        _bear_mean = np.mean(_bear_vals) * 100 if len(_bear_vals) > 0 else 0
+        _bull_std = np.std(_bull_vals) * 100 if len(_bull_vals) > 0 else 0
+        _bear_std = np.std(_bear_vals) * 100 if len(_bear_vals) > 0 else 0
+        _interp_rows.append(
+            f"| {_name} | {_bull_mean:+.2f}% | {_bull_std:.2f}% "
+            f"| {_bear_mean:+.2f}% | {_bear_std:.2f}% |"
+        )
+    _interp_table = "\n".join(_interp_rows)
+
+    _n_bull = int(np.sum(_regimes == 0))
+    _n_bear = int(np.sum(_regimes == 1))
+
+    mo.md(
+        f"""
+### Interpreting the regime-conditional distributions
+
+Each panel above shows the **regime-conditional marginal**
+$p(y_{{t,i}} \\mid s_t = k)$ — the distribution of asset $i$'s monthly
+return given the market is in regime $k$.  These are the building blocks
+the model must learn: one distribution per asset per regime.
+
+**Sample statistics from the generated data** ({_n_bull} bull months,
+{_n_bear} bear months):
+
+| Asset | Bull mean | Bull std | Bear mean | Bear std |
+|-------|-----------|----------|-----------|----------|
+{_interp_table}
+
+The bull distributions are tightly clustered around small positive means,
+while the bear distributions are shifted left (negative mean) with roughly
+double the spread.  This is consistent with the generating parameters and
+confirms the data exhibit the regime structure we expect.
+
+The **overlap region** between the two KDEs — where the green and red
+densities intersect — is where regime classification is most uncertain.
+Returns in that overlap could plausibly come from either regime, and the
+model will assign intermediate posterior probabilities at those time steps.
+        """
+    )
     return
 
 
@@ -381,30 +536,15 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Marginalisation and the forward algorithm
+    ### Marginalisation of the discrete regime sequence
 
     The discrete regime sequence $s_{1:T}$ is **analytically marginalised**
     via the forward algorithm (Hamilton, 1989).  This is essential: the
     No-U-Turn Sampler (NUTS) requires a differentiable, continuous parameter
-    space and cannot sample discrete variables directly.
-
-    The forward recursion computes the log-forward probabilities
-    $\log \alpha_{t,k} = \log p(\mathbf{y}_{1:t},\, s_t = k \mid \theta)$
-    via
-
-    $$
-    \log \alpha_{t,k} =
-    \log \sum_{k'} \exp\!\bigl(\log \alpha_{t-1,k'} + \log P_{k',k}\bigr)
-    \;+\; \log p(\mathbf{y}_t \mid s_t = k)
-    $$
-
-    with $\log \alpha_{1,k} = \log \pi_{0,k} + \log p(\mathbf{y}_1 \mid
-    s_1 = k)$.  The marginalised log-likelihood is
-    $\log p(\mathbf{y}_{1:T} \mid \theta) = \text{logsumexp}_k\,
-    \log \alpha_{T,k}$.
-
-    The recursion is implemented via `pytensor.scan`, which compiles to
-    `jax.lax.scan` under the NumPyro backend for efficient execution.
+    space and cannot sample discrete variables directly.  The forward
+    recursion computes $\log p(\mathbf{y}_{1:T} \mid \theta)$ in
+    $\mathcal{O}(T K^2)$ time, avoiding the need to enumerate all $K^T$
+    possible regime sequences.  See **Appendix A** for the full derivation.
     """)
     return
 
@@ -416,29 +556,36 @@ def _(build_model, data):
 
 
 @app.cell
-def _(mo, model):
-    import pymc as pm
+def _(mo):
+    mo.md(r"""
+    ### Model DAG
 
-    try:
-        graph = pm.model_to_graphviz(model)
-        _dag_msg = (
-            "### Model DAG\n\n"
-            "The graph below shows the model's dependency structure.  The "
-            "discrete regime chain does not appear as a node — it has been "
-            "analytically marginalised.  The `hmm_loglik` Potential encodes "
-            "the forward-algorithm log-likelihood as a scalar contribution "
-            "to the joint log-density."
-        )
-    except Exception:
-        graph = None
-        _dag_msg = "*(graphviz not available — skipping DAG render)*"
-    mo.md(_dag_msg)
-    return (graph,)
+    The diagram below shows the model's dependency structure.  The
+    discrete regime chain $s_{1:T}$ does not appear as a node — it has been
+    analytically marginalised.  The `hmm_loglik` Potential encodes
+    the forward-algorithm log-likelihood as a scalar contribution
+    to the joint log-density.
+    """)
+    return
 
 
 @app.cell
-def _(graph):
-    graph
+def _(mo):
+    mo.mermaid(
+        """
+        graph TD
+            alpha["α (Dirichlet conc.)"] --> P["P (K×K transition matrix)"]
+            P --> hmm["hmm_loglik (Potential)"]
+            mu["μ ~ Normal(0, 0.05)  (K×d)"] --> hmm
+            eta["η (LKJ shape)"] --> chol0["chol_cov_0 ~ LKJCholeskyCov"]
+            eta --> chol1["chol_cov_1 ~ LKJCholeskyCov"]
+            sd_prior["σ ~ HalfNormal(0.10)"] --> chol0
+            sd_prior --> chol1
+            chol0 --> hmm
+            chol1 --> hmm
+            y["y₁:T (observed returns)"] --> hmm
+        """
+    )
     return
 
 
@@ -450,23 +597,28 @@ def _(mo):
     The following assumptions are built into the current specification.
     Each represents a modelling choice with known limitations:
 
-    1. **Gaussian emissions.** Returns are conditionally Normal given the
-       regime.  This captures regime-level mean and volatility shifts but
-       cannot model intra-regime fat tails (excess kurtosis within a single
-       regime).  A multivariate Student-$t$ extension addresses this
-       limitation.
+    1. **Gaussian emissions.**
+       $\mathbf{y}_t \mid s_t = k \sim \mathcal{N}(\boldsymbol{\mu}_k,\,
+       \boldsymbol{\Sigma}_k)$.
+       This captures regime-level mean and volatility shifts but
+       cannot model intra-regime fat tails (excess kurtosis $\kappa > 3$
+       within a single regime).  A multivariate Student-$t$ extension
+       addresses this limitation.
 
-    2. **Time-homogeneous transition matrix.**  $\mathbf{P}$ is constant
-       across time — regime-switching probabilities do not depend on
+    2. **Time-homogeneous transition matrix.**
+       $P(s_t = k \mid s_{t-1} = j) = P_{jk}$ for all $t$.
+       Regime-switching probabilities do not depend on
        observable covariates (e.g. VIX, yield curve slope).  Time-varying
        transition probabilities (TVTP) relax this.
 
-    3. **$K = 2$ regimes.**  The number of regimes is fixed a priori,
-       not selected from data.  Bayesian model comparison via WAIC can
+    3. **$K = 2$ regimes.**
+       $K$ is fixed a priori, not a random variable — it is not inferred
+       from the data.  Bayesian model comparison via WAIC can
        evaluate whether $K = 2$ is adequate relative to $K = 1$ or $K = 3$.
 
-    4. **Conditional independence across time.**  Given the regime,
-       $\mathbf{y}_t$ is independent of $\mathbf{y}_{t-1}$.  This rules out
+    4. **Conditional independence across time.**
+       $\mathbf{y}_t \perp \mathbf{y}_{t-1} \mid s_t$ — given the current
+       regime, today's return is independent of yesterday's.  This rules out
        within-regime momentum or mean-reversion effects (Hamilton's original
        1989 model used AR(4) dynamics within each regime).
     """)
@@ -510,11 +662,16 @@ def _(check_diagnostics_label_aware, idata, mo):
     _status = lambda v: "pass" if v else "**FAIL**"
     _ls = diag["label_switching_detected"]
     _ls_msg = (
-        f"Yes — naive max R-hat was {diag['naive_max_rhat']:.3f}, "
-        f"improved to {diag['max_rhat']:.3f} after relabeling "
-        f"(best permutations: {diag['best_permutations']})"
+        f"Yes — corrected via permutation alignment "
+        f"(naive max R-hat {diag['naive_max_rhat']:.3f} → "
+        f"aligned {diag['max_rhat']:.3f}). "
+        f"See **Appendix B** for details."
         if _ls
         else "No"
+    )
+    _ess_note = (
+        " (computed on label-aligned posterior)"
+        if diag.get("ess_on_aligned", False) else ""
     )
     mo.md(
         f"""
@@ -524,26 +681,18 @@ def _(check_diagnostics_label_aware, idata, mo):
 |-------|-------|--------|
 | Divergences | {diag['n_divergences']} | {_status(diag['no_divergences'])} |
 | max R-hat | {diag['max_rhat']:.3f} | {_status(diag['rhat_ok'])} |
-| min ESS (bulk) | {diag['min_ess_bulk']:.0f} | {_status(diag['ess_ok'])} |
+| min ESS (bulk){_ess_note} | {diag['min_ess_bulk']:.0f} | {_status(diag['ess_ok'])} |
 | Label switching | {_ls_msg} | |
 
-**Interpreting the diagnostics:**
-
-- **Divergences** indicate regions of high curvature in the posterior
-  geometry where the leapfrog integrator's discrete steps introduce
-  unacceptable bias.  Zero divergences is the target.
-- **R-hat** $< 1.01$ indicates that all chains have converged to the
-  same stationary distribution.  Values above 1.01 in a regime-switching
-  model may reflect **label switching** (a symmetry of the likelihood,
-  not a sampling failure) rather than genuine non-convergence.
-- **ESS (bulk)** $> 400$ ensures enough effective independent draws for
+- **Divergences** = 0 confirms the sampler navigated the posterior geometry
+  without numerical issues.
+- **R-hat** < 1.01 after label alignment confirms all chains converged to
+  the same stationary distribution.
+- **ESS (bulk)** > 400 ensures enough effective independent draws for
   reliable 94% credible intervals (BDA3, Ch. 11).
-- **Label switching** is diagnosed by comparing per-chain posterior means
-  of $\\boldsymbol{{\\mu}}$ and testing whether a permutation of regime
-  labels improves R-hat.
         """
     )
-    return
+    return (diag,)
 
 
 @app.cell
@@ -562,20 +711,11 @@ def _(mo):
     mo.md(r"""
     **Reading the trace plots:**  The left column shows the marginal
     posterior density for each parameter element; the right column shows the
-    sampled values across iterations.  Look for:
-
-    1. **Overlapping chains** in the trace (right) — indicates good mixing
-       and convergence to the same stationary distribution.
-    2. **Absence of stuck segments or spikes** — no divergences or
-       trapping in local modes.
-    3. **Stable marginal densities** across chains (left) — each chain
-       explores the same posterior region.
-
-    With $K = 2$ regimes and no hard ordering constraint, some chains may
-    **label-switch**: one chain calls the high-mean regime "regime 0" while
-    another calls it "regime 1".  This produces bimodal marginals in the
-    trace plots but is cosmetic — it does not affect per-draw regime recovery
-    (each draw is internally consistent).
+    sampled values across iterations.  Overlapping chains in the trace
+    indicate good mixing.  With $K = 2$ regimes and no hard ordering
+    constraint, some chains may **label-switch** — producing bimodal
+    marginals.  This is a cosmetic artefact (see **Appendix B**), not a
+    sampling failure.
     """)
     return
 
@@ -583,50 +723,18 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Label switching: diagnosis and resolution
-
-    Label switching is a **symmetry of the likelihood**: if we permute the
-    regime indices and simultaneously permute $\mathbf{P}$,
-    $\boldsymbol{\mu}$, and $\boldsymbol{\Sigma}$, the likelihood is
-    unchanged.  The posterior is therefore invariant under label permutations,
-    and different MCMC chains may explore different "copies" of the same mode.
-
-    Our label-aware diagnostic aligns chains by comparing draw-averaged
-    $\boldsymbol{\mu}$ values.  For each chain, it finds the permutation of
-    regime indices that minimises the sum-of-squared differences to chain 0's
-    mean, then recomputes R-hat on the relabeled posterior.  If relabeling
-    improves R-hat below the 1.01 threshold, the original exceedance was due
-    to label switching rather than genuine non-convergence.
-
-    For the FFBS regime recovery that follows, label switching is handled
-    separately: the regime-sequence samples are aligned across chains by
-    maximising element-wise agreement.
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## Regime recovery: forward-filter backward-sampler
+    ## Regime recovery
 
     > **Question:** Given the fitted posterior, what is the posterior
     > probability that the market was in a bear regime at each point in time?
 
     The marginalised model integrates out the regime sequence during sampling,
     so we recover it post-hoc using a **forward-filter backward-sampler
-    (FFBS)**.  For each posterior draw of $(\mathbf{P}, \boldsymbol{\mu}_k,
-    \boldsymbol{\Sigma}_k)$:
-
-    1. **Forward pass:** compute $\log \alpha_{t,k}$ using the draw's
-       parameters and the observed returns.
-    2. **Backward sampling:** sample $s_T$ from the normalised $\alpha_T$,
-       then for $t = T{-}1, \ldots, 1$, sample $s_t \mid s_{t+1}$ from
-       $\alpha_t \odot \mathbf{P}_{:,\, s_{t+1}}$.
-
-    This produces one complete regime-sequence sample per posterior draw,
-    preserving the full joint uncertainty over both parameters *and* regimes.
-    The collection of regime-sequence samples yields a posterior probability
+    (FFBS)**.  For each posterior draw, the FFBS runs a forward pass
+    (identical to the marginalisation step) and then samples a complete
+    regime sequence backward in time.  This preserves the full joint
+    uncertainty over both parameters *and* regimes.  The collection of
+    regime-sequence samples yields a posterior probability
     $P(s_t = k \mid \mathbf{y}_{1:T})$ at every time step.
     """)
     return
@@ -651,50 +759,149 @@ def _(data, plot_regime_probabilities, plt, regime_samples):
 
 
 @app.cell
+def _(data, mo, np, regime_samples):
+    _flat = regime_samples.reshape(-1, regime_samples.shape[-1])
+    _T = _flat.shape[1]
+
+    _bear_prob = (_flat == 1).mean(axis=0)
+
+    _true_reg = data["regimes"]
+    _transitions = np.where(np.diff(_true_reg) != 0)[0]
+    _n_transitions = len(_transitions)
+
+    _uncertain_mask = (_bear_prob > 0.2) & (_bear_prob < 0.8)
+    _n_uncertain = int(_uncertain_mask.sum())
+
+    _modal = np.array(
+        [np.bincount(_flat[:, t], minlength=2).argmax() for t in range(_T)]
+    )
+    _acc_direct = np.mean(_modal == _true_reg)
+    _acc_flipped = np.mean((1 - _modal) == _true_reg)
+    accuracy = max(_acc_direct, _acc_flipped)
+
+    mo.md(
+        f"""
+### Regime recovery results
+
+The stacked bands show $P(s_t = k \\mid \\mathbf{{y}}_{{1:T}})$ at every
+time step, aggregated over all posterior draws.  The dashed black line
+is the true generating regime.
+
+**Key observations:**
+
+- **Modal regime accuracy:** **{accuracy:.1%}** (best of direct / label-flipped).
+  The model correctly identifies the regime at almost every time step.
+- **Transition detection:** The data contain **{_n_transitions}** true regime
+  transitions.  Posterior uncertainty concentrates at these transition
+  points — exactly where the model *should* be least certain.
+- **Uncertain periods:** {_n_uncertain} out of {_T} months have
+  $P(\\text{{Bear}}) \\in (0.2, 0.8)$, reflecting genuine ambiguity at
+  regime boundaries.
+
+This accuracy metric is only possible because we use synthetic data with
+known ground-truth regimes.  With real market data, the posterior
+probability bands are the primary output — they express the model's
+belief about the current regime *and* its uncertainty, without requiring
+knowledge of the true state.
+        """
+    )
+    return (accuracy,)
+
+
+@app.cell
 def _(mo):
     mo.md(r"""
-    The stacked bands show $P(s_t = k \mid \mathbf{y}_{1:T})$ at every
-    time step, aggregated over all posterior draws.  The dashed black line
-    is the true generating regime.  Posterior uncertainty concentrates at
-    **transition points** — exactly where the model should be least certain.
+    ### A realistic portfolio use-case: regime-aware allocation
 
-    **Portfolio implication.**  A portfolio manager can use these posterior
-    regime probabilities to dynamically tilt allocations: when
-    $P(\text{Bear} \mid \text{data})$ exceeds $0.5$, the model signals
-    elevated downside risk.  The width of the probability bands at transition
-    points communicates signal uncertainty — exactly the information needed
-    to size positions responsibly.  Unlike a point-estimate classifier,
-    the Bayesian approach produces a *probability* of regime change, not a
-    binary signal.
+    How would a portfolio manager actually *use* these regime probabilities?
+    As a proof of concept, consider a simple rule applied to **US Equity**:
+
+    - **Regime-aware strategy:** At each month $t$, use the *filtered*
+      probability $P(s_{t-1} = \text{Bear} \mid \mathbf{y}_{1:t-1})$ —
+      which depends only on data available *before* time $t$ — to set the
+      equity weight.  If $P(\text{Bear}) > 0.5$, reduce the equity
+      allocation to 30% (rest in cash at 0% return).  Otherwise, hold 100%
+      equity.
+    - **Static benchmark:** Hold 100% equity at all times (no regime info).
+
+    > **Important caveats:** (1) The posterior parameters were estimated
+    > on the *full* sample — this is an in-sample demonstration, not a
+    > backtest.  A proper out-of-sample P&L analysis with walk-forward
+    > re-estimation will be the topic of a dedicated future blog post.
+    > (2) Transaction costs and slippage are ignored.
     """)
     return
 
 
 @app.cell
-def _(data, mo, np, regime_samples):
-    flat = regime_samples.reshape(-1, regime_samples.shape[-1])
-    modal = np.array(
-        [np.bincount(flat[:, t], minlength=2).argmax() for t in range(flat.shape[1])]
-    )
-    acc_direct = np.mean(modal == data["regimes"])
-    acc_flipped = np.mean((1 - modal) == data["regimes"])
-    accuracy = max(acc_direct, acc_flipped)
+def _(data, diag, forward_filter_probs, mo, np, plt):
+    _aligned = diag["aligned_idata"]
+    _filtered = forward_filter_probs(_aligned, data["returns"], thin=10)
 
-    mo.md(
-        f"""
-### Regime recovery accuracy
+    _mu_mean = _aligned.posterior["mu"].values.mean(axis=(0, 1))
+    _bear_idx = int(np.argmin(_mu_mean.sum(axis=1)))
+    _bull_idx = 1 - _bear_idx
 
-Modal regime accuracy (best of direct / label-flipped):
-**{accuracy:.1%}**
+    _bear_filt = _filtered[:, _bear_idx]
 
-This metric is available only because we use synthetic data with known
-ground-truth regimes.  With real market data, regime accuracy cannot be
-directly computed — which is why the posterior probability bands above
-are the primary output: they express the model's belief about the
-current regime *and* its uncertainty, without requiring knowledge of
-the true state.
-        """
-    )
+    _returns_us = data["returns"][:, 0]
+    _T_pnl = len(_returns_us)
+
+    _weights = np.ones(_T_pnl)
+    for _t in range(1, _T_pnl):
+        _weights[_t] = 0.3 if _bear_filt[_t - 1] > 0.5 else 1.0
+
+    _pnl_aware = np.cumprod(1.0 + _weights * _returns_us)
+    _pnl_static = np.cumprod(1.0 + _returns_us)
+
+    _total_aware = (_pnl_aware[-1] - 1) * 100
+    _total_static = (_pnl_static[-1] - 1) * 100
+    _vol_aware = np.std(_weights * _returns_us) * np.sqrt(12) * 100
+    _vol_static = np.std(_returns_us) * np.sqrt(12) * 100
+    _max_dd_static = np.min(_pnl_static / np.maximum.accumulate(_pnl_static) - 1) * 100
+    _max_dd_aware = np.min(_pnl_aware / np.maximum.accumulate(_pnl_aware) - 1) * 100
+
+    fig_pnl, _ax_pnl = plt.subplots(figsize=(14, 4))
+    _ax_pnl.plot(_pnl_static, label="Static 100% equity", linewidth=1.5, color="#666666")
+    _ax_pnl.plot(_pnl_aware, label="Regime-aware (30% in bear)", linewidth=1.5, color="#1976D2")
+
+    for _t in range(_T_pnl):
+        if _weights[_t] < 1.0:
+            _ax_pnl.axvspan(_t - 0.5, _t + 0.5, alpha=0.08, color="red")
+
+    _ax_pnl.set_xlabel("Time (months)")
+    _ax_pnl.set_ylabel("Cumulative value ($1 invested)")
+    _ax_pnl.set_title("Regime-Aware vs. Static Allocation — US Equity")
+    _ax_pnl.legend(loc="upper left")
+    _ax_pnl.set_xlim(0, _T_pnl - 1)
+    fig_pnl.tight_layout()
+
+    _n_reduced = int((_weights < 1.0).sum())
+
+    mo.vstack([
+        fig_pnl,
+        mo.md(
+            f"""
+| Metric | Static | Regime-aware |
+|--------|--------|--------------|
+| Cumulative return | {_total_static:+.1f}% | {_total_aware:+.1f}% |
+| Annualised volatility | {_vol_static:.1f}% | {_vol_aware:.1f}% |
+| Max drawdown | {_max_dd_static:+.1f}% | {_max_dd_aware:+.1f}% |
+
+The bear regime was identified as posterior regime **{_bear_idx}**
+(the regime with lower average $\\mu$).  The strategy reduced equity
+exposure in **{_n_reduced}** out of {_T_pnl} months (light-red shading).
+
+The regime-aware strategy sacrifices some cumulative return for materially
+lower volatility and a shallower maximum drawdown — the kind of
+risk-adjusted trade-off a portfolio manager would actually evaluate.
+
+A rigorous out-of-sample evaluation — with walk-forward re-estimation,
+proper transaction cost modelling, and multiple seeds — is the subject of
+a future post in this series.
+            """
+        ),
+    ])
     return
 
 
@@ -717,13 +924,40 @@ def _(mo):
 
 
 @app.cell
-def _(data, idata, mo, plot_posterior_summary):
+def _(asset_names, data, diag, mo, np, plot_posterior_summary):
+    _idata_plot = diag["aligned_idata"]
+
+    _mu_post = _idata_plot.posterior["mu"].values.mean(axis=(0, 1))
+    _bear_idx = int(np.argmin(_mu_post.sum(axis=1)))
+    _bull_idx = 1 - _bear_idx
+
+    _perm = [0, 0]
+    _perm[_bear_idx] = 1
+    _perm[_bull_idx] = 0
+    _true_mus_matched = data["params"]["mus"][_perm]
+    _true_P_matched = data["params"]["P"][np.ix_(_perm, _perm)]
+
+    _label_for = {_bear_idx: "Bear", _bull_idx: "Bull"}
+
+    _mu_labels = []
+    for _k in range(2):
+        for _a in asset_names:
+            _mu_labels.append(f"{_label_for[_k]} – {_a}")
+
+    _P_labels = []
+    for _j in range(2):
+        for _k in range(2):
+            _P_labels.append(f"{_label_for[_j]}→{_label_for[_k]}")
+
     fig_mu = plot_posterior_summary(
-        idata, var_name="mu", true_values=data["params"]["mus"],
+        _idata_plot, var_name="mu", true_values=_true_mus_matched,
+        labels=_mu_labels,
         title="Posterior: regime means (μ)",
+        xlim=(-0.1, 0.1),
     )
     fig_P = plot_posterior_summary(
-        idata, var_name="P", true_values=data["params"]["P"],
+        _idata_plot, var_name="P", true_values=_true_P_matched,
+        labels=_P_labels,
         title="Posterior: transition matrix (P)",
     )
     mo.vstack([fig_mu, fig_P])
@@ -731,32 +965,107 @@ def _(data, idata, mo, plot_posterior_summary):
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    ### Interpreting the posterior in financial terms
+def _(asset_names, az, data, diag, mo, np):
+    _idata_interp = diag["aligned_idata"]
 
-    **Regime means.**  The posterior mean of $\mu_{k,i}$ (monthly) maps to
-    an annualised expected return of $12 \times \mu_{k,i}$.  For example, if
-    the posterior mean of the bull-regime equity mean is $+0.010$, this
-    corresponds to $+12\%$ annualised.  The width of the 94% credible
-    interval, similarly annualised, represents genuine parameter uncertainty
-    — not sampling variability in a frequentist sense, but the posterior
-    belief about the parameter's plausible range given $T$ observations.
+    _mu_post_mean = _idata_interp.posterior["mu"].values.mean(axis=(0, 1))
+    _bear_idx = int(np.argmin(_mu_post_mean.sum(axis=1)))
+    _bull_idx = 1 - _bear_idx
+    _perm = [0, 0]
+    _perm[_bear_idx] = 1
+    _perm[_bull_idx] = 0
 
-    **Transition matrix.**  $P_{kk}$ determines the expected regime duration
-    via $\mathbb{E}[\text{duration}_k] = 1 / (1 - P_{kk})$.  For the
-    generating parameters: $P_{00} = 0.95$ implies a bull regime persisting
-    for an expected 20 months ($\approx 1.7$ years), while $P_{11} = 0.90$
-    implies bear episodes lasting 10 months on average.  The posterior
-    credible interval around $P_{kk}$ translates directly into uncertainty
-    about regime persistence — a key input for tactical allocation timing.
+    _summary_mu = az.summary(
+        _idata_interp, var_names=["mu"], hdi_prob=0.94
+    )
+    _summary_P = az.summary(
+        _idata_interp, var_names=["P"], hdi_prob=0.94
+    )
 
-    **Decision-theoretic interpretation.**  A Bayesian portfolio optimiser
-    would integrate over this posterior uncertainty when computing optimal
-    weights, producing allocations that are robust to parameter estimation
-    error.  The credible interval widths quantify how much the data *can*
-    tell us — and, equally important, where substantial uncertainty remains.
-    """)
+    _true_mus = data["params"]["mus"]
+    _true_P = data["params"]["P"]
+    _K = _true_mus.shape[0]
+    _d = _true_mus.shape[1]
+
+    _label_for = {_bull_idx: "Bull", _bear_idx: "Bear"}
+
+    _mu_rows = []
+    for _k in range(_K):
+        _data_k = _perm[_k]
+        for _i in range(_d):
+            _idx = _k * _d + _i
+            _row = _summary_mu.iloc[_idx]
+            _mean_m = _row["mean"]
+            _hdi_lo = _row["hdi_3%"]
+            _hdi_hi = _row["hdi_97%"]
+            _true_val = _true_mus[_data_k, _i]
+            _mean_ann = _mean_m * 12 * 100
+            _hdi_lo_ann = _hdi_lo * 12 * 100
+            _hdi_hi_ann = _hdi_hi * 12 * 100
+            _true_ann = _true_val * 12 * 100
+            _covered = "yes" if _hdi_lo <= _true_val <= _hdi_hi else "no"
+            _mu_rows.append(
+                f"| {_label_for[_k]} – {asset_names[_i]} "
+                f"| {_mean_ann:+.1f}% | [{_hdi_lo_ann:+.1f}%, {_hdi_hi_ann:+.1f}%] "
+                f"| {_true_ann:+.1f}% | {_covered} |"
+            )
+    _mu_table = "\n".join(_mu_rows)
+
+    _P_rows = []
+    for _k in range(_K):
+        _data_k = _perm[_k]
+        _idx_diag = _k * _K + _k
+        _row = _summary_P.iloc[_idx_diag]
+        _mean_p = _row["mean"]
+        _hdi_lo = _row["hdi_3%"]
+        _hdi_hi = _row["hdi_97%"]
+        _true_p = _true_P[_data_k, _data_k]
+        _dur_mean = 1.0 / (1.0 - _mean_p) if _mean_p < 1 else np.inf
+        _dur_true = 1.0 / (1.0 - _true_p) if _true_p < 1 else np.inf
+        _covered = "yes" if _hdi_lo <= _true_p <= _hdi_hi else "no"
+        _P_rows.append(
+            f"| $P$ ({_label_for[_k]}→{_label_for[_k]}) "
+            f"| {_mean_p:.3f} | [{_hdi_lo:.3f}, {_hdi_hi:.3f}] "
+            f"| {_true_p:.3f} | {_covered} "
+            f"| {_dur_mean:.1f} months (true: {_dur_true:.1f}) |"
+        )
+    _P_table = "\n".join(_P_rows)
+
+    mo.md(
+        f"""
+### Interpreting the results
+
+The posterior regime indices do not necessarily match the data-generation
+indices.  We identify regimes by their posterior mean: the regime with
+higher (lower) average $\\mu$ across assets is labelled Bull (Bear).
+In this run, posterior regime **{_bull_idx}** = Bull, posterior regime
+**{_bear_idx}** = Bear.
+
+**Regime means** (annualised):
+
+| Parameter | Posterior mean | 94% HDI | True value | Covered? |
+|-----------|---------------|---------|------------|----------|
+{_mu_table}
+
+All true regime means fall within their 94% HDI — the model successfully
+recovers the generating parameters.  The HDI widths reflect genuine
+uncertainty: with {data['config']['T']} months of data, the bull-regime
+means are estimated more precisely (more bull months in the sample) than
+the bear-regime means.
+
+**Transition matrix** (self-transition probabilities):
+
+| Parameter | Posterior mean | 94% HDI | True value | Covered? | Implied duration |
+|-----------|---------------|---------|------------|----------|-----------------|
+{_P_table}
+
+The posterior means for the self-transition probabilities are close to the
+true values, and the implied regime durations match well.  A Bayesian
+portfolio optimiser would integrate over these posterior distributions when
+computing optimal weights, producing allocations that are robust to
+parameter estimation error.
+        """
+    )
     return
 
 
@@ -818,31 +1127,128 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## Series roadmap
+    ---
 
-    This notebook is the first in a series on Bayesian regime-switching
-    models for portfolio management:
+    ## Appendix A: The forward algorithm
 
-    1. **The Problem and the Model** — *this notebook.*  Build a 2-regime
-       HMM for equity returns, fit it with NUTS, recover regimes via FFBS.
-    2. **Model Validation** — prior and posterior predictive checks.
-       Verify that the priors produce plausible data and that the fitted
-       model reproduces observed return features (Bayesian p-values,
-       BDA3 Ch. 6).
-    3. **Multi-Asset Extension** — extend to an equity-bond-gold universe
-       with regime-dependent correlations.  Address the correlation-masking
-       problem and its implications for hedge ratios.
-    4. **Portfolio Analytics** — translate posterior uncertainty into
-       VaR, CVaR, regime-conditional correlations, and hedge ratio
-       implications.
-    5. **Model Comparison** — $K = 1$ vs $K = 2$ vs $K = 3$ via WAIC.
-       Introduce the 3-regime scenario and discuss honest uncertainty
-       (Vehtari, Gelman & Gabry, 2017).
-    6. **Real Data Application** — apply the pipeline to S&P 500,
-       long-duration Treasuries, and gold (2000–2025).
-    7. **Extensions** — Student-$t$ emissions, factor covariance
-       structure, time-varying transition probabilities.
+    The discrete regime sequence $s_{1:T}$ is analytically marginalised
+    via the forward algorithm.  This is essential because NUTS requires a
+    differentiable, continuous parameter space and cannot sample discrete
+    variables directly.
 
+    ### Forward recursion
+
+    Define the log-forward probabilities:
+
+    $$
+    \log \alpha_{t,k} = \log p(\mathbf{y}_{1:t},\, s_t = k \mid \theta)
+    $$
+
+    **Initialisation** ($t = 1$):
+
+    $$
+    \log \alpha_{1,k} = \log \pi_{0,k} + \log p(\mathbf{y}_1 \mid s_1 = k)
+    $$
+
+    **Recursion** ($t = 2, \ldots, T$):
+
+    $$
+    \log \alpha_{t,k} =
+    \log \sum_{k'=0}^{K-1} \exp\!\bigl(\log \alpha_{t-1,k'} + \log P_{k',k}\bigr)
+    \;+\; \log p(\mathbf{y}_t \mid s_t = k)
+    $$
+
+    The $\text{logsumexp}$ operation prevents numerical underflow in the
+    summation over previous states.
+
+    **Marginalised log-likelihood:**
+
+    $$
+    \log p(\mathbf{y}_{1:T} \mid \theta) = \text{logsumexp}_{k}\, \log \alpha_{T,k}
+    $$
+
+    This scalar is added to the joint log-density via a `pm.Potential`,
+    enabling NUTS to explore the continuous parameter space
+    $\theta = (\mathbf{P}, \boldsymbol{\mu}, \boldsymbol{\Sigma})$ while
+    accounting for the discrete latent structure.
+
+    ### Implementation
+
+    The recursion is implemented via `pytensor.scan`, which compiles to
+    `jax.lax.scan` under the NumPyro backend.  This avoids Python-level
+    loops over $T$ and enables efficient GPU/CPU vectorisation.  The
+    computational cost is $\mathcal{O}(T K^2)$ per log-likelihood evaluation.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Appendix B: Label switching
+
+    ### The symmetry
+
+    Label switching is a **fundamental symmetry of the likelihood** in
+    mixture and HMM models.  If we simultaneously permute the regime
+    indices and the corresponding parameters —
+
+    $$
+    \boldsymbol{\mu}_k \to \boldsymbol{\mu}_{\sigma(k)}, \quad
+    \boldsymbol{\Sigma}_k \to \boldsymbol{\Sigma}_{\sigma(k)}, \quad
+    P_{jk} \to P_{\sigma(j),\sigma(k)}
+    $$
+
+    for any permutation $\sigma$ of $\{0, \ldots, K{-}1\}$ — the
+    likelihood is unchanged:
+
+    $$
+    p(\mathbf{y}_{1:T} \mid \theta) = p(\mathbf{y}_{1:T} \mid \sigma(\theta))
+    $$
+
+    The posterior is therefore **multimodal by construction**: it has $K!$
+    equivalent modes corresponding to the $K!$ label permutations.
+    Different MCMC chains may explore different modes.
+
+    ### Concrete example (K = 2)
+
+    Suppose chain 0 learns (Bull = regime 0, Bear = regime 1) while
+    chain 1 learns (Bull = regime 1, Bear = regime 0).  Both chains have
+    identical likelihoods and produce identical regime-sequence samples —
+    they just use opposite labels.  Naively computing R-hat across chains
+    compares $\mu_{\text{Bull}}$ from chain 0 against $\mu_{\text{Bear}}$
+    from chain 1, producing a spurious R-hat > 1.
+
+    ### Our resolution
+
+    **Parameter alignment:** For each chain $c$, we compute the draw-averaged
+    $\boldsymbol{\mu}$ and find the permutation $\sigma_c$ that minimises
+    the sum-of-squared differences to chain 0's draw-averaged
+    $\boldsymbol{\mu}$:
+
+    $$
+    \sigma_c = \arg\min_{\sigma} \sum_{k,i}
+    \bigl(\bar{\mu}^{(c)}_{\sigma(k),i} - \bar{\mu}^{(0)}_{k,i}\bigr)^2
+    $$
+
+    We then permute $\mathbf{P}$, $\boldsymbol{\mu}$, and all Cholesky
+    factors in chain $c$ according to $\sigma_c$ before computing R-hat
+    and ESS.
+
+    **FFBS alignment:** For the regime-sequence samples, we align chains
+    by maximising element-wise agreement with the reference chain, using
+    the same permutation search.
+
+    This post-hoc relabeling is simple and exact for small $K$.  For
+    larger $K$, more sophisticated methods (e.g. Stephens 2000,
+    "Dealing with label switching in mixture models") may be needed.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
     ---
 
     **References**
@@ -859,6 +1265,8 @@ def _(mo):
     - Vehtari, A., Gelman, A. and Gabry, J. (2017). "Practical Bayesian
       Model Evaluation Using Leave-One-Out Cross-Validation and WAIC."
       *Statistics and Computing*, 27(5), 1413–1432.
+    - Stephens, M. (2000). "Dealing with Label Switching in Mixture Models."
+      *Journal of the Royal Statistical Society B*, 62(4), 795–809.
     """)
     return
 

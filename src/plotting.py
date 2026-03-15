@@ -100,39 +100,76 @@ def plot_posterior_summary(
     idata: az.InferenceData,
     var_name: str = "mu",
     true_values: np.ndarray | None = None,
+    labels: list[str] | None = None,
     title: str | None = None,
     figsize: tuple[float, float] = (10, 4),
+    xlim: tuple[float, float] | None = None,
+    hdi_prob: float = 0.94,
 ) -> matplotlib.figure.Figure:
     """
-    Forest plot for a single variable with per-row true-value markers.
+    Forest plot with explicit labels and correctly-placed true-value markers.
 
     Parameters
     ----------
-    idata : inference data from NUTS sampling
-    var_name : variable to plot (e.g. "mu", "P")
-    true_values : array whose flattened values match the forest-plot rows
-        (bottom to top).  For mu (K,d) pass ``params["mus"]``; for P (K,K)
-        pass ``params["P"]``.
-    title : optional title; defaults to "Posterior: {var_name}"
-    figsize : figure size
+    idata: az.InferenceData
+        Inference data from NUTS sampling.
+    var_name: str
+        Variable to plot (e.g. "mu", "P").
+    true_values: np.ndarray | None
+        Array whose flattened shape matches the variable's trailing dimensions.
+    labels: list[str] | None
+        One label per flattened parameter row, in the same order as ravel().
+    title: str | None
+        Optional title; defaults to "Posterior: {var_name}".
+    figsize: tuple[float, float]
+        Figure size.
+    xlim: tuple[float, float] | None
+        Optional x-axis limits.
+    hdi_prob: float
+        HDI probability (default 0.94).
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The forest plot figure.
     """
-    axes = az.plot_forest(
-        idata, var_names=[var_name], combined=True, figsize=figsize,
-    )
-    ax = axes[0]
-    fig = ax.figure
+    samples = idata.posterior[var_name].values
+    flat_samples = samples.reshape(-1, *samples.shape[2:])
+    flat_all = flat_samples.reshape(flat_samples.shape[0], -1)
+    n_params = flat_all.shape[1]
+
+    means = flat_all.mean(axis=0)
+    alpha = (1 - hdi_prob) / 2
+    hdi_lo = np.percentile(flat_all, alpha * 100, axis=0)
+    hdi_hi = np.percentile(flat_all, (1 - alpha) * 100, axis=0)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    y_pos = np.arange(n_params)
+
+    for i in range(n_params):
+        ax.plot([hdi_lo[i], hdi_hi[i]], [i, i], color="#2196F3", linewidth=2.5)
+        ax.plot(means[i], i, "o", color="#2196F3", markersize=5, zorder=5)
 
     if true_values is not None:
-        flat = np.asarray(true_values).ravel()
-        y_ticks = ax.get_yticks()
-        for i, y in enumerate(y_ticks):
-            if i < len(flat):
-                ax.plot(
-                    flat[i], y, marker="d", color="red", markersize=8,
-                    zorder=10, label="True value" if i == 0 else None,
-                )
+        flat_true = np.asarray(true_values).ravel()
+        for i in range(min(n_params, len(flat_true))):
+            ax.plot(
+                flat_true[i], i, marker="d", color="red", markersize=8,
+                zorder=10, label="True value" if i == 0 else None,
+            )
 
+    if labels is not None:
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels[:n_params])
+    else:
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels([f"{var_name}[{i}]" for i in range(n_params)])
+
+    ax.invert_yaxis()
     ax.set_title(title or f"Posterior: {var_name}")
     ax.legend(loc="best", framealpha=0.8)
+    ax.axvline(0, color="gray", linewidth=0.5, linestyle="--", alpha=0.5)
+    if xlim is not None:
+        ax.set_xlim(xlim)
     fig.tight_layout()
     return fig
