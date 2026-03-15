@@ -95,12 +95,11 @@ def build_model(
         def forward_step(log_lik_t, log_alpha_prev, log_P_):
             return pt.logsumexp(log_alpha_prev[:, None] + log_P_, axis=0) + log_lik_t
 
-        log_alphas = pytensor.scan(
+        log_alphas, _ = pytensor.scan(
             fn=forward_step,
             sequences=[log_lik[1:]],
             outputs_info=[log_alpha_init],
             non_sequences=[log_P],
-            return_updates=False,
         )
 
         pm.Potential("hmm_loglik", pt.logsumexp(log_alphas[-1]))
