@@ -252,7 +252,7 @@ def _():
 @app.cell
 def _(mo):
     T_slider = mo.ui.slider(
-        start=60, stop=360, value=120, step=12,
+        start=60, stop=360, value=180, step=12,
         label="T (months)",
     )
     seed_number = mo.ui.number(
@@ -271,22 +271,22 @@ def _(mo):
 @app.cell
 def _(asset_names, mo):
     _bull_mu_defaults = [0.010, 0.008, 0.012]
-    _bear_mu_defaults = [-0.005, -0.008, -0.003]
+    _bear_mu_defaults = [-0.005, -0.008, -0.01]
     _bull_vol_defaults = [0.040, 0.035, 0.045]
     _bear_vol_defaults = [0.080, 0.090, 0.100]
 
     bull_mean_sliders = [
-        mo.ui.slider(start=0.0, stop=0.05, value=v, step=0.001,
+        mo.ui.slider(start=-0.2, stop=0.2, value=v, step=0.005,
                       label=f"Bull μ – {a}")
         for a, v in zip(asset_names, _bull_mu_defaults)
     ]
     bear_mean_sliders = [
-        mo.ui.slider(start=-0.05, stop=0.0, value=v, step=0.001,
+        mo.ui.slider(start=-0.2, stop=0.2, value=v, step=0.005,
                       label=f"Bear μ – {a}")
         for a, v in zip(asset_names, _bear_mu_defaults)
     ]
     bull_vol_sliders = [
-        mo.ui.slider(start=0.01, stop=0.10, value=v, step=0.005,
+        mo.ui.slider(start=0.02, stop=0.20, value=v, step=0.005,
                       label=f"Bull σ – {a}")
         for a, v in zip(asset_names, _bull_vol_defaults)
     ]
