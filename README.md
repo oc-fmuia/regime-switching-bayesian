@@ -35,8 +35,7 @@ src/regime_switching_bayesian/
     inference.py     NUTS fitting, diagnostics, FFBS, label alignment
     plotting.py      Regime probability, return, and posterior plots
 notebooks/
-    regime_switching_v0.py   Minimal proof-of-concept marimo notebook
-    regime_switching_v1.py   Extended blog-style narrative with allocation demo
+    01_bayesian_hmm_fundamentals.py   Blog-style narrative with allocation demo
 tests/                       Pytest suite (unit + slow integration)
 docs/                        Math spec, finance spec, PyMC spec, impl plans
 research/                    Exploratory marginalization probes
@@ -68,7 +67,7 @@ everywhere.
 
 ```bash
 eval "$(pixi shell-hook -e notebook)"
-marimo edit notebooks/regime_switching_v1.py
+marimo edit notebooks/01_bayesian_hmm_fundamentals.py
 ```
 
 ### Run the tests
