@@ -86,7 +86,8 @@ def _(mo):
     model as a Bayesian Hidden Markov Model (HMM) using
     [PyMC](https://www.pymc.io/), fit it via the No-U-Turn Sampler (NUTS),
     and recover the latent regime sequence with a backward-sampling pass
-    that reconstructs the most likely state at each point in time.
+    that yields *smoothed* posterior probabilities over regimes — the best
+    retrospective assessment the model can make given the full dataset.
 
     This is the first instalment in a series of blog posts that builds
     the regime-switching framework from the ground up.  Subsequent
@@ -803,6 +804,22 @@ def _(mo):
     uncertainty over both parameters *and* regimes.  The collection of
     regime-sequence samples yields a posterior probability
     $P(s_t = k \mid \mathbf{y}_{1:T})$ at every time step.
+
+    **Smoothed, not filtered.**  Because the backward pass conditions each
+    $s_t$ on the *entire* observed series $\mathbf{y}_{1:T}$ (including
+    future observations), the resulting probabilities are **smoothed**
+    estimates.  They answer *"given everything we observed, what regime was
+    the market most likely in at time $t$?"* — the best retrospective
+    assessment the model can make.  This is exactly the right diagnostic for
+    **model validation**: if the model cannot recover the true regimes even
+    with full hindsight, it is mis-specified.
+
+    These smoothed probabilities should **not** be used directly for
+    back-testing a trading strategy, because they embed look-ahead bias.
+    A realistic, causal allocation rule must instead rely on **filtered**
+    probabilities $P(s_t = k \mid \mathbf{y}_{1:t})$, which use only
+    data available up to time $t$.  We adopt exactly this approach in the
+    portfolio section below.
     """)
     return
 
