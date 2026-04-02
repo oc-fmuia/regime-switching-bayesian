@@ -86,7 +86,8 @@ def _(mo):
     model as a Bayesian Hidden Markov Model (HMM) using
     [PyMC](https://www.pymc.io/), fit it via the No-U-Turn Sampler (NUTS),
     and recover the latent regime sequence with a backward-sampling pass
-    that reconstructs the most likely state at each point in time.
+    that yields *smoothed* posterior probabilities over regimes — the best
+    retrospective assessment the model can make given the full dataset.
 
     This is the first instalment in a series of blog posts that builds
     the regime-switching framework from the ground up.  Subsequent
@@ -803,6 +804,22 @@ def _(mo):
     uncertainty over both parameters *and* regimes.  The collection of
     regime-sequence samples yields a posterior probability
     $P(s_t = k \mid \mathbf{y}_{1:T})$ at every time step.
+
+    **Smoothed, not filtered.**  Because the backward pass conditions each
+    $s_t$ on the *entire* observed series $\mathbf{y}_{1:T}$ (including
+    future observations), the resulting probabilities are **smoothed**
+    estimates.  They answer *"given everything we observed, what regime was
+    the market most likely in at time $t$?"* — the best retrospective
+    assessment the model can make.  This is exactly the right diagnostic for
+    **model validation**: if the model cannot recover the true regimes even
+    with full hindsight, it is mis-specified.
+
+    These smoothed probabilities should **not** be used directly for
+    back-testing a trading strategy, because they embed look-ahead bias.
+    A realistic, causal allocation rule must instead rely on **filtered**
+    probabilities $P(s_t = k \mid \mathbf{y}_{1:t})$, which use only
+    data available up to time $t$.  We adopt exactly this approach in the
+    portfolio section below.
     """)
     return
 
@@ -886,9 +903,17 @@ def _(mo):
     - **Regime-aware strategy:** At each month $t$, use the *filtered*
       probability $P(s_{t-1} = \text{Bear} \mid \mathbf{y}_{1:t-1})$,
       which depends only on data available *before* time $t$, to set the
-      equity weight.  If $P(\text{Bear}) > 0.5$, reduce the equity
-      allocation to 30% (rest in cash at 0% return).  Otherwise, hold 100%
-      equity.
+      portfolio mix between equities and risk-free securities yielding
+      4% per annum (≈ 0.33% per month).  If $P(\text{Bear}) > 0.5$,
+      allocate 20% to equities and 80% to risk-free; otherwise allocate
+      80% to equities and 20% to risk-free.
+
+    The asymmetric split reflects the strategy's risk-management role:
+    in bull regimes the portfolio captures most of the equity upside
+    while earning a floor return on the remaining 20%; in bear regimes
+    it shifts decisively to safety, keeping only a small equity
+    toe-hold so it is not entirely out of the market if the regime
+    signal is wrong.
 
     The regime-aware strategy is a **risk-management** tool, not an
     alpha generator.  Its value shows up in risk-adjusted metrics rather
@@ -907,10 +932,13 @@ def _(mo):
     $$
 
     where $r_{\text{ann}}$ is the annualised return and MaxDD the maximum
-    peak-to-trough drawdown.  Reducing equity exposure during bear periods
-    lowers both the mean return and the volatility; because bear months
-    have higher volatility than bull months, the volatility reduction is
-    proportionally larger, and the Sharpe ratio typically improves.
+    peak-to-trough drawdown.  Because the strategy always holds some
+    risk-free securities, it never matches the full equity upside;
+    however, shifting to a 20/80 equity/risk-free split during bear
+    months sharply reduces volatility.  Since bear months have higher
+    volatility than bull months, the volatility reduction is
+    proportionally larger than the return reduction, and the Sharpe
+    ratio typically improves.
 
     > **Important caveats:** (1) The posterior parameters were estimated
     > on the *full* sample, so this is an in-sample demonstration, not a
@@ -928,13 +956,14 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
 
     _r_ew = data["returns"].mean(axis=1)
     _T_pnl = len(_r_ew)
+    _rf_monthly = 0.04 / 12  # 4% p.a. risk-free rate
 
-    _w_aware = np.ones(_T_pnl)
+    _w_equity = np.ones(_T_pnl)
     for _t in range(1, _T_pnl):
-        _w_aware[_t] = 0.3 if _bear_filt[_t - 1] > 0.5 else 1.0
+        _w_equity[_t] = 0.2 if _bear_filt[_t - 1] > 0.5 else 0.8
 
     _r_static = _r_ew
-    _r_aware = _w_aware * _r_ew
+    _r_aware = _w_equity * _r_ew + (1.0 - _w_equity) * _rf_monthly
 
     _cum_static = np.cumprod(1.0 + _r_static)
     _cum_aware = np.cumprod(1.0 + _r_aware)
@@ -954,10 +983,10 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
 
     fig_pnl, _ax_pnl = plt.subplots(figsize=(14, 4))
     _ax_pnl.plot(_cum_static, label="Static 100% equity", linewidth=1.5, color="#666666")
-    _ax_pnl.plot(_cum_aware, label="Regime-aware (30% in bear)", linewidth=1.5, color="#1976D2")
+    _ax_pnl.plot(_cum_aware, label="Regime-aware (80/20 bull, 20/80 bear)", linewidth=1.5, color="#1976D2")
 
     for _t in range(_T_pnl):
-        if _w_aware[_t] < 1.0:
+        if _w_equity[_t] < 0.8:
             _ax_pnl.axvspan(_t - 0.5, _t + 0.5, alpha=0.08, color="red")
 
     _ax_pnl.set_xlabel("Time (months)")
@@ -967,7 +996,7 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
     _ax_pnl.set_xlim(0, _T_pnl - 1)
     fig_pnl.tight_layout()
 
-    _n_reduced = int((_w_aware < 1.0).sum())
+    _n_reduced = int((_w_equity < 0.8).sum())
 
     mo.vstack([
         fig_pnl,
@@ -982,15 +1011,17 @@ def _(aligned_idata, bear_idx, data, forward_filter_probs, mo, np, plt):
 | Sharpe ratio | {_sh_s:.2f} | {_sh_a:.2f} |
 | Calmar ratio | {_cal_s:.2f} | {_cal_a:.2f} |
 
-The portfolio is an equal-weight average of all three equity indices.
-The regime-aware strategy reduced equity exposure in **{_n_reduced}** out
-of {_T_pnl} months (light-red shading).  The cumulative return may be lower
-because the strategy holds less equity on average, but the **Sharpe ratio**
-improves because bear months have higher volatility than bull months:
-reducing exposure during those periods lowers the denominator
-($\\hat\\sigma_r$) proportionally more than the numerator ($\\bar{{r}}$).
+The equity sleeve is an equal-weight average of all three equity indices;
+the non-equity portion earns a 4% p.a. risk-free rate.  In bull months
+the split is 80/20 equity/risk-free; in bear months it flips to 20/80.
+The regime-aware strategy entered the defensive 20/80 allocation in
+**{_n_reduced}** out of {_T_pnl} months (light-red shading).
+The **Sharpe ratio** improves because bear months have higher volatility
+than bull months: shifting to mostly risk-free during those periods
+lowers the denominator ($\\hat\\sigma_r$) proportionally more than the
+numerator ($\\bar{{r}}$), which is cushioned by the risk-free yield.
 The **Calmar ratio** improves for the same reason, i.e. the shallower
-max drawdown more than compensates for the lower annualised return.
+max drawdown more than compensates for any reduction in annualised return.
 
 A rigorous out-of-sample evaluation with walk-forward re-estimation,
 proper transaction cost modelling, and multiple seeds as well as a
