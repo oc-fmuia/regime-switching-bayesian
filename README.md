@@ -77,43 +77,49 @@ eval "$(pixi shell-hook -e dev)"
 pytest
 ```
 
-## Roadmap
+## Notebook series
 
-The following notebooks will be added to this repository in the future:
+This repository is organised as a series of notebooks, each building on
+the previous one.
 
-1. **Scenario forward simulation and example performance evaluations.**
-   Given the fitted posterior, simulate forward return paths under
-   different regime assumptions (e.g. pin the bear regime for 12 months,
-   shock covariances by a factor of 2) and compute regime-conditional
-   portfolio metrics: VaR, CVaR, maximum drawdown distributions, and
-   Sharpe/Calmar ratios -- all with full parameter uncertainty
-   propagated. This turns the model from a diagnostic tool into an
-   actionable risk-management framework.
+1. **Bayesian HMM fundamentals** (`01_bayesian_hmm_fundamentals.py`)
+   *Status: complete.*
+   Two-regime (bull/bear) HMM on synthetic data with multivariate Normal
+   emissions and diagonal covariance. Covers the full pipeline: data
+   generation, marginalised likelihood via the forward algorithm, NUTS
+   inference, FFBS regime recovery, smoothed vs filtered probabilities,
+   and a regime-aware 80/20 equity/risk-free allocation demo. Includes
+   appendices on the forward algorithm derivation and label switching.
 
-2. **Regime-dependent correlations, long-tailed emissions, and
-   autoregression.** Replace the identity correlation assumption
-   (R\_k = I) with regime-dependent correlation matrices estimated via
-   LKJCholeskyCov. Replace multivariate Normal emissions with
-   multivariate Student-t to capture intra-regime fat tails (excess
-   kurtosis that the regime mixture alone cannot produce). Add optional
-   AR(p) dynamics within each regime to model momentum and
-   mean-reversion effects that vary by market environment.
+2. **Scenario forward simulation and performance evaluation.**
+   *Status: planned.*
+   Simulate forward return paths under different regime assumptions
+   (e.g. pin the bear regime for 12 months, shock covariances) and
+   compute regime-conditional portfolio metrics (VaR, CVaR, maximum
+   drawdown distributions, Sharpe/Calmar ratios) with full parameter
+   uncertainty propagated.
 
-3. **Exogenous covariates driving model parameters and their effect on
-   scenario analysis.** Replace the constant Dirichlet transition matrix
-   with time-varying transition probabilities (TVTP) conditioned on
-   observable macro variables (e.g. VIX, yield curve slope):
-   P\_ij(t) = softmax(X\_t * beta). This lets economic indicators
-   influence regime-switching rates, and allows scenario analysis to
-   ask "what happens to regime probabilities if the VIX doubles?" rather
-   than treating transitions as purely data-driven.
+3. **Regime-dependent correlations, fat-tailed emissions, and
+   autoregression.**
+   *Status: planned.*
+   Replace the identity correlation assumption with regime-dependent
+   correlation matrices via LKJCholeskyCov. Replace multivariate Normal
+   emissions with multivariate Student-t to capture intra-regime fat
+   tails. Add optional AR(p) dynamics within each regime to model
+   momentum and mean-reversion effects.
 
-4. **Real data applications.** Apply the full pipeline to historical
-   market data (e.g. S&P 500, long-duration Treasuries, gold from 2000
-   to 2025) using a yfinance-backed data loader that produces arrays
-   compatible with the synthetic data interface. Includes walk-forward
-   re-estimation for proper out-of-sample evaluation and comparison
-   against the synthetic-data results from earlier notebooks.
+4. **Time-varying transition probabilities with exogenous covariates.**
+   *Status: planned.*
+   Condition transition probabilities on observable macro variables
+   (e.g. VIX, yield curve slope) via a softmax link, enabling scenario
+   analysis questions such as "what happens to regime probabilities if
+   the VIX doubles?".
+
+5. **Real data applications.**
+   *Status: planned.*
+   Apply the full pipeline to historical market data (e.g. S&P 500,
+   long-duration Treasuries, gold, 2000-2025) with walk-forward
+   re-estimation for proper out-of-sample evaluation.
 
 ## License
 
