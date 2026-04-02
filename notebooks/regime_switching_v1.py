@@ -88,37 +88,11 @@ def _(mo):
     and recover the latent regime sequence with a backward-sampling pass
     that reconstructs the most likely state at each point in time.
 
-    ### Series roadmap
-
-    This is the first instalment of a series that builds the
-    regime-switching framework from the ground up.  Each notebook extends
-    the previous one, so the reader accumulates both the statistical
-    machinery and the portfolio intuition needed to apply the model to real
-    data.
-
-    1. **The problem and the model** (*this notebook*) establishes the core
-       two-regime HMM on synthetic equity data, demonstrates that the
-       Bayesian posterior recovers the true generating parameters, and
-       provides a proof-of-concept regime-aware allocation strategy.
-    2. **Model validation** adds prior and posterior predictive checks,
-       ensuring that the fitted model can reproduce the salient features
-       of the observed return distribution rather than merely fitting in
-       sample (Bayesian p-values, BDA3 Ch. 6).
-    3. **Multi-asset extension** moves from an equity-only universe to
-       equities, bonds, and gold with regime-dependent correlations,
-       addressing the correlation-masking problem that is central to hedge
-       ratio construction.
-    4. **Portfolio analytics** translates the posterior into actionable risk
-       measures: regime-conditional VaR, CVaR, and hedge ratio
-       distributions, all with full parameter uncertainty propagated.
-    5. **Model comparison** evaluates $K = 1$ vs $K = 2$ vs $K = 3$ via
-       WAIC, quantifying whether the additional complexity of a third
-       regime is warranted by the data (Vehtari, Gelman & Gabry, 2017).
-    6. **Real data application** applies the full pipeline to S&P 500,
-       long-duration Treasuries, and gold from 2000 to 2025.
-    7. **Extensions** explores Student-$t$ emissions for within-regime fat
-       tails, factor covariance structure, and time-varying transition
-       probabilities.
+    This is the first instalment in a series of blog posts that builds
+    the regime-switching framework from the ground up.  Subsequent
+    notebooks extend the model with scenario simulation, richer emission
+    distributions, exogenous covariates, and real data applications; see
+    the **Series roadmap** at the end of this notebook.
 
     **References.**
     Hamilton (1989), *Econometrica*;
@@ -223,7 +197,9 @@ def _(mo):
     | $\mathbf{R}_k = \mathbf{L}_k \mathbf{L}_k^\top$ | Correlation matrix (via its Cholesky factor $\mathbf{L}_k$) | Encodes within-regime co-movement |
     | $\boldsymbol{\Sigma}_k$ | Full covariance matrix | Determines the joint return distribution in regime $k$ |
 
-    **Simplifying assumption in this notebook:** we set $\mathbf{R}_k = \mathbf{I}$
+    ### Simplifying assumption in this notebook
+
+    We set $\mathbf{R}_k = \mathbf{I}$
     (the identity matrix) for every regime, so that
     $\boldsymbol{\Sigma}_k = \mathbf{D}_k^2 = \mathrm{diag}(\sigma_{k,1}^2,
     \ldots, \sigma_{k,d}^2)$.
@@ -598,30 +574,47 @@ def _(mo):
 
     The diagram below shows the model's dependency structure.  The
     discrete regime chain $s_{1:T}$ does not appear as a node because it
-    has been analytically marginalised.  The `hmm_loglik` Potential encodes
-    the forward-algorithm log-likelihood as a scalar contribution
-    to the joint log-density.
+    has been analytically marginalised.  The key components are:
+
+    - **$\mathbf{P} \sim \mathrm{Dirichlet}$** ($K \times K$): the
+      transition matrix, with a sticky Dirichlet prior that encourages
+      regime persistence.
+    - **$\boldsymbol{\mu} \sim \mathrm{Normal}$** ($K \times d$):
+      regime-conditional mean return vectors.
+    - **$\texttt{chol\_cov\_k} \sim \mathrm{LKJCholeskyCov}$** (one per
+      regime): the Cholesky-factored covariance matrices, from which
+      PyMC derives deterministic nodes for the correlation matrices
+      ($\texttt{chol\_cov\_k\_corr}$) and the per-asset standard
+      deviations ($\texttt{chol\_cov\_k\_stds}$).
+    - **$\texttt{hmm\_loglik} \sim \mathrm{Potential}$**: the
+      marginalised HMM log-likelihood computed by the forward algorithm.
+      This is not a random variable but a scalar contribution to the
+      joint log-density that encodes both the emission likelihoods and
+      the transition dynamics.
     """)
     return
 
 
 @app.cell
-def _(mo):
-    mo.mermaid(
-        """
-        graph TD
-            alpha["α (Dirichlet conc.)"] --> P["P (K×K transition matrix)"]
-            P --> hmm["hmm_loglik (Potential)"]
-            mu["μ ~ Normal(0, 0.05)  (K×d)"] --> hmm
-            eta["η (LKJ shape)"] --> chol0["chol_cov_0 ~ LKJCholeskyCov"]
-            eta --> chol1["chol_cov_1 ~ LKJCholeskyCov"]
-            sd_prior["σ ~ HalfNormal(0.10)"] --> chol0
-            sd_prior --> chol1
-            chol0 --> hmm
-            chol1 --> hmm
-            y["y₁:T (observed returns)"] --> hmm
-        """
-    )
+def _(model):
+    import pymc as pm
+
+    pm.model_to_graphviz(model)
+
+    # Custom mermaid alternative (kept for reference):
+    #
+    # mo.mermaid(
+    #     """
+    #     graph TD
+    #         alpha["α (Dirichlet conc.)"] --> P["P (K×K transition matrix)"]
+    #         P --> hmm["hmm_loglik (Potential)"]
+    #         mu["μ ~ Normal(0, 0.05)  (K×d)"] --> hmm
+    #         eta["η (LKJ shape)"] --> chol0["chol_cov_0 ~ LKJCholeskyCov"] & chol1["chol_cov_1 ~ LKJCholeskyCov"]
+    #         sd_prior["σ ~ HalfNormal(0.10)"] --> chol0 & chol1
+    #         chol0 & chol1 --> hmm
+    #         y["y₁:T (observed returns)"] --> hmm
+    #     """
+    # )
     return
 
 
@@ -659,6 +652,15 @@ def _(mo):
        This rules out
        within-regime momentum or mean-reversion effects (Hamilton's original
        1989 model used AR(4) dynamics within each regime).
+
+    5. **Sticky Dirichlet prior on $\mathbf{P}$.**
+       Each row of the transition matrix is drawn from a Dirichlet with
+       concentration $\alpha_{\text{diag}} = 20$,
+       $\alpha_{\text{off}} = 2$.  This encodes a prior belief that
+       regimes are persistent (prior mean self-transition probability
+       $\approx 0.91$).  The prior is symmetric across regimes and does
+       not favour any particular regime ordering, which is why
+       label switching can occur (see **Appendix B**).
     """)
     return
 
@@ -1210,6 +1212,52 @@ def _(mo):
     - **No posterior predictive checks.**  We have not verified whether
       the fitted model reproduces key features of the observed data
       (e.g. marginal return distributions, autocorrelation structure).
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Series roadmap
+
+    This notebook is the first in a series.  The planned follow-ups, each
+    building on the previous one, are:
+
+    1. **Scenario forward simulation and performance evaluation.**
+       Given the fitted posterior, simulate forward return paths under
+       different regime assumptions (e.g. pin the bear regime for 12
+       months, shock covariances by a factor of 2) and compute
+       regime-conditional portfolio metrics: VaR, CVaR, maximum drawdown
+       distributions, and Sharpe / Calmar ratios -- all with full
+       parameter uncertainty propagated.
+
+    2. **Regime-dependent correlations, long-tailed emissions, and
+       autoregression.**  Replace the identity correlation assumption
+       ($\mathbf{R}_k = \mathbf{I}$) with regime-dependent correlation
+       matrices estimated via `LKJCholeskyCov`.  Replace multivariate
+       Normal emissions with multivariate Student-$t$ to capture
+       intra-regime fat tails.  Add optional AR($p$) dynamics within each
+       regime to model momentum and mean-reversion effects that vary by
+       market environment.
+
+    3. **Exogenous covariates and their effect on scenario analysis.**
+       Replace the constant Dirichlet transition matrix with time-varying
+       transition probabilities (TVTP) conditioned on observable macro
+       variables (e.g. VIX, yield curve slope):
+       $P_{ij}(t) = \mathrm{softmax}(\mathbf{x}_t^\top
+       \boldsymbol{\beta})$.  This lets economic indicators influence
+       regime-switching rates and allows scenario analysis to ask *"what
+       happens to regime probabilities if the VIX doubles?"* rather than
+       treating transitions as purely data-driven.
+
+    4. **Real data applications.**  Apply the full pipeline to historical
+       market data (e.g. S\&P 500, long-duration Treasuries, and gold
+       from 2000 to 2025) using a data loader that produces arrays
+       compatible with the synthetic data interface.  Includes
+       walk-forward re-estimation for proper out-of-sample evaluation and
+       comparison against the synthetic-data results from earlier
+       notebooks.
     """)
     return
 
